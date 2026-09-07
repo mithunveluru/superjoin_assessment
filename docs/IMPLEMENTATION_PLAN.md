@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 not started.
 
 | Phase | Title |
 |---|---|
@@ -20,7 +20,7 @@ so retrieval/threshold tuning is evidence‑driven.
 | 3 | Fact / evidence model + persistence — ✅ |
 | 4 | Candidate fact extraction — ✅ |
 | 5 | Evidence verification + quarantine — ✅ |
-| 6 | Context + numeric / date / unit normalization |
+| 6 | Context + numeric / date / unit normalization — ✅ |
 | 7 | Entity resolution |
 | 8 | Candidate retrieval + deterministic signals |
 | 9 | Relationship reasoning + explanations |
@@ -53,7 +53,7 @@ app/
   ingest.py        # Phase 2
   extract.py       # Phase 4
   verify.py        # Phase 5 — deterministic evidence verification (verify_document / verify_fact)
-  normalize.py     # Phase 6
+  normalize.py     # Phase 6 — deterministic numeric/date/unit/period normalization (normalize_document)
   entities.py      # Phase 7
   retrieve.py      # Phase 8
   signals.py       # Phase 8  (deterministic comparison)
@@ -334,25 +334,46 @@ reasoning-eligible without VERIFIED/PARTIAL grounding. **Met.**
 
 ---
 
-## PHASE 6 — Context + numeric / date / unit normalization
+## PHASE 6 — Context + numeric / date / unit normalization  ✅ COMPLETE
 
-**Objective:** deterministic parsing fills the numeric‑representation columns, the
-period columns, `unit_norm`, `modality` sanity; promote to `NORMALIZED` then
-(after entity link in Phase 7) `ELIGIBLE_FOR_REASONING`. Raw always preserved.
-**Files:** `app/normalize.py`, `tests/test_normalize.py`.
-**Tasks:** `parse_number` (commas, ₹/Rs/US$, `(x)`→neg, magnitude map
-crore/lakh/mn/bn/k, `%`→`percentage_ratio`, `bps`); `parse_currency`;
-`parse_unit`; `parse_period(raw, fy_convention)` covering every DATA_MODEL row
-incl. `FY2025/26` slash form and 9‑month ranges; `apply(fact, document)` fills
-`value_raw/numeric_value/magnitude/magnitude_factor/base_value/currency/
-is_percentage/percentage_ratio/unit_raw/unit_norm/reporting_period_*`, never
-clearing a `*_raw`. Normalization failure → `failures(normalization_failed)`,
-fact stays `GROUNDED` (not eligible).
-**Acceptance:** the DATA_MODEL numeric table and period table reproduce exactly;
-`(452)`→−452, `₹8,142 crore`→base 8.142e10, `5%`→ratio 0.05, `781 Bps`→0.0781,
-`FY2025/26`→(2025‑04‑01,2026‑04‑01); property: every set normalized field has a
-non‑null `*_raw`.
-**Gate:** normalization correct on the full example tables; context not lost.
+**Objective:** deterministic parsing (no LLM) fills the numeric‑representation
+columns, the period columns, `currency`, and `unit_norm`; promote `GROUNDED →
+NORMALIZED`. `*_raw` fields are never cleared or overwritten.
+**Files shipped:** `app/normalize.py`, `tests/test_normalize.py` (72 tests). No
+migration — every target column already exists from migration 2. No new
+dependency.
+**What shipped:**
+- Pure parsers, each reproducing its DATA_MODEL worked row exactly:
+  `parse_number` (thousands commas, `(x)`/leading `−` → negative, magnitude map
+  crore·lakh·thousand·million·billion·trillion + `bps` factor 1e‑4, `%` →
+  `percentage_ratio`), `parse_currency` (₹/Rs/INR, US$/USD, €, £),
+  `parse_unit` (`%`/bps/`x` → ratio, tonne, days, sqft, count‑nouns, currency),
+  `parse_period(raw, fy_convention)` (instant / quarter / half_year /
+  fiscal_year / calendar_year / range / `unknown`, incl. `FY2025/26` slash form,
+  `2024‑25` Indian form, `Fiscal 2021`, and "N months ended <date>" ranges),
+  `detect_fy_convention` (reads "financial/fiscal year ended <Month>" from the
+  document's own text → `apr-mar` / `jan-dec` / `jul-jun`; other end‑months not
+  representable → `None`).
+- `apply_normalization(conn, fact_id, *, fy_convention)` — fills the columns in
+  one in‑place `UPDATE`; numeric‑unparseable → `failures(normalization_failed)`
+  and the fact **stays `GROUNDED`** (never promoted); an unresolvable period is
+  not a failure — `reporting_period_type='unknown'`, fact still `NORMALIZED`.
+- `normalize_document(document_id)` — resolves `documents.fy_convention` first
+  (detected from page text, else `settings.fy_convention_default`,
+  `fy_convention_source` recorded), opens a `run_type='normalize'` run, processes
+  `lifecycle_state IN ('GROUNDED','NORMALIZED')` with per‑fact isolation,
+  idempotent (re‑run → identical values, stale `normalization_failed` rows
+  cleared first, no duplicates). `normalization_summary` for observability.
+**Acceptance (met):** the DATA_MODEL numeric table and period table reproduce
+exactly — `₹(452) Cr`→−452 / base −4.52e9, `₹8,142 crore`→base 8.142e10,
+`5%`→ratio 0.05 / base 0.05, `781 Bps`→ratio 0.0781, `FY2025/26`→
+(2025‑04‑01,2026‑04‑01), `nine months ended December 31, 2021`→
+(2021‑04‑01,2022‑01‑01,range). Property test: every populated normalized field
+has a non‑null `*_raw`. Real starter‑PDF deterministic smoke: FY convention
+detected from the annual‑report text, numeric + period columns filled,
+`value_raw`/`reporting_period_raw` untouched, `GROUNDED → NORMALIZED`.
+**Gate:** normalization correct on the full example tables; context not lost;
+schema unchanged (`user_version` stays 3). **Met.**
 
 ---
 

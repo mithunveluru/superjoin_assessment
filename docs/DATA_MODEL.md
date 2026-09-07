@@ -449,7 +449,7 @@ Index: `failures(run_id)`, `failures(failure_type)`.
 | `RAW` | reserved (transition not yet used) | `UNVERIFIED` | 0 | no |
 | `CANDIDATE` | **4 (extraction)** — every extracted fact enters here | `UNVERIFIED` | 0 | no |
 | `GROUNDED` | **5 (verification)** — `verify_document`/`verify_fact` on a VERIFIED/PARTIAL result | `VERIFIED` / `PARTIAL` | 0 | no |
-| `NORMALIZED` | 6 (normalization) | `VERIFIED` / `PARTIAL` | 0 | no |
+| `NORMALIZED` | **6 (normalization)** — `normalize_document` promotes on a filled numeric/period; a `normalization_failed` fact stays `GROUNDED` | `VERIFIED` / `PARTIAL` | 0 | no |
 | `ELIGIBLE_FOR_REASONING` | 6→7 (after normalize + entity link) | `VERIFIED` / `PARTIAL` | 1 | yes |
 | `QUARANTINED` | any | any | 0 (CHECK) | no — appears in `failures` + `/failures` UI |
 
@@ -512,14 +512,16 @@ with the full candidate payload in `detail`; sibling candidates are unaffected.
 |---|---|---|---|---|---|---|---|---|---|---|
 | `₹8,142 crore` | `₹8,142 crore` | 8142 | `crore` | 1e7 | 8.142e10 | INR | 0 | – | `₹ crore` | `INR` |
 | `Rs. 578 Cr` | `Rs. 578 Cr` | 578 | `crore` | 1e7 | 5.78e9 | INR | 0 | – | `Rs Cr` | `INR` |
-| `5%` | `5%` | 5 | – | – | – | – | 1 | 0.05 | `%` | `ratio` |
+| `5%` | `5%` | 5 | – | – | 0.05 | – | 1 | 0.05 | `%` | `ratio` |
 | `781 Bps` | `781 Bps` | 781 | `bps` | 1e-4 | 0.0781 | – | 1 | 0.0781 | `bps` | `ratio` |
 | `(452)` (₹ Cr ctx) | `₹(452) Cr` | -452 | `crore` | 1e7 | -4.52e9 | INR | 0 | – | `₹ Cr` | `INR` |
 | `US$216 billion` | `US$216 billion` | 216 | `billion` | 1e9 | 2.16e11 | USD | 0 | – | `US$ billion` | `USD` |
 | `1.4 Mn Tons` | `1.4 Mn Tons` | 1.4 | `million` | 1e6 | 1.4e6 | – | 0 | – | `Mn Tons` | `tonne` |
 
 Rule: never store only `base_value`. Comparison uses `base_value` (+ `unit_norm`
-/ `currency` compatibility); display and audit use `value_raw`.
+/ `currency` compatibility); display and audit use `value_raw`. For a percentage
+/ bps input `base_value` is the ratio itself (`0.05`, `0.0781`); otherwise
+`base_value = numeric_value * magnitude_factor`.
 
 ## Provenance — four concepts, worked
 
@@ -546,7 +548,38 @@ candidate for `TEMPORAL_EVOLUTION` (revision) or `DIFFERENT_CONTEXT` (vintage),
 | `FY2025/26` (imf slash form) | 2025-04-01 | 2026-04-01 | fiscal_year |
 | `Fiscal 2021` | 2020-04-01 | 2021-04-01 | fiscal_year |
 | `2024` (calendar, in a global‑growth context) | 2024-01-01 | 2025-01-01 | calendar_year |
+| `2024-25` (apr-mar) | 2024-04-01 | 2025-04-01 | fiscal_year |
+| `year ended March 31, 2024` | 2023-04-01 | 2024-04-01 | fiscal_year |
+| `2020-2021` (both 4‑digit) | 2020-01-01 | 2022-01-01 | range |
 | unparseable | NULL | NULL | unknown |
+
+## Phase 6 normalization semantics
+
+`app/normalize.py` is deterministic (no LLM) and **adds no schema change** —
+every column it writes was created in migration 2.
+
+- `normalize_document(document_id)` resolves `documents.fy_convention` once: if
+  the column is still `unknown` and `fy_convention_source != 'override'`, it runs
+  `detect_fy_convention` over the document's own page text ("financial / fiscal
+  year ended <Month>" → `apr-mar` / `jan-dec` / `jul-jun`; other end‑months are
+  not representable in the CHECK and stay `unknown`). Failing that it falls back
+  to `settings.fy_convention_default` and records
+  `fy_convention_source='config_default'`. It never assumes two FY labels denote
+  the same period without resolving each against its document's convention.
+- `apply_normalization` fills `numeric_value` (preferring the already‑verified
+  value), `magnitude` / `magnitude_factor` / `base_value`, `is_percentage` /
+  `percentage_ratio`, `currency`, `unit_norm`, and `reporting_period_start` /
+  `reporting_period_end` / `reporting_period_type` in one in‑place `UPDATE`. It
+  **never clears or overwrites a `*_raw` field** — a property test asserts every
+  populated normalized field has a non‑null raw counterpart.
+- A number that cannot be parsed → `failures(failure_type='normalization_failed',
+  detail.reason='numeric_unparseable')` and the fact **stays `GROUNDED`** (not
+  promoted, never reasoning‑eligible). An unresolvable period is *not* a failure:
+  `reporting_period_type='unknown'`, `start`/`end` NULL, fact still promoted to
+  `NORMALIZED`. Ambiguity is preserved, not coerced.
+- Re‑running is idempotent: the single fact row is updated in place, stale
+  `normalization_failed` rows for the fact are deleted before any re‑insert, and
+  only `lifecycle_state IN ('GROUNDED','NORMALIZED')` facts are processed.
 
 ## Vector storage
 

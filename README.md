@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–5 of 15 complete; Phase 6 not started.** This repo contains
+> **Status: Phases 1–6 of 15 complete; Phase 7 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -43,7 +43,15 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > number/currency/unit) **quarantines** it (preserved, never reasoning-eligible).
 > Claims are never rewritten — only an evidence *span* is corrected, and only when
 > the exact quote occurs once. **Phase 5 verifies evidence; it does not perform
-> semantic reasoning.** No normalization, entity resolution, retrieval, or
+> semantic reasoning.** **Deterministic normalization** (`app/normalize.py` — no
+> LLM) then parses each grounded fact's number, currency, unit, and reporting
+> period into the comparison columns (`base_value`, `percentage_ratio`,
+> `unit_norm`, `reporting_period_*`), resolving fiscal-year labels against a
+> convention detected from the document's own text (config default otherwise);
+> `*_raw` is never overwritten, an unparseable number leaves the fact `GROUNDED`
+> with a `normalization_failed` record, an unresolvable period becomes
+> `type='unknown'` rather than a guess, and a success promotes `GROUNDED →
+> NORMALIZED`. No entity resolution, retrieval, or
 > relationship inference exists yet — those are later phases, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
 > positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
@@ -75,7 +83,7 @@ pip install -r requirements.txt
 cp .env.example .env                  # optional; every setting has a default
 ```
 
-An `ANTHROPIC_API_KEY` is **not** needed for Phases 1–3 or for the test suite
+An `ANTHROPIC_API_KEY` is **not** needed for Phases 1–3, 5–6, or for the test suite
 (candidate extraction is exercised with a fake LLM client). It **is** needed for
 a live candidate-extraction run — `scripts/smoke_extract.py <pdf>`.
 
@@ -149,6 +157,20 @@ pytest
   reasoning-eligible while a quarantined one cannot (helper + DB CHECK);
   provenance chain preserved; idempotent re-runs; `verification_summary`
   observability; a real starter-PDF deterministic check. **No LLM, no API key.**
+- **Phase 6** covers: the pure parsers against the DATA_MODEL numeric and period
+  worked tables exactly (`parse_number` — commas, `(x)`/`−` negatives, magnitude
+  map incl. `bps`, `%` → ratio; `parse_currency`; `parse_unit`; `parse_period` —
+  instant / quarter / half_year / fiscal_year / calendar_year / range / unknown,
+  incl. `FY2025/26`, `2024-25`, `Fiscal 2021`, "N months ended <date>";
+  `detect_fy_convention` incl. the unrepresentable-month → `None` case);
+  `apply_normalization` filling the columns without ever touching a `*_raw`
+  (property test), `GROUNDED → NORMALIZED` on success, `normalization_failed` +
+  stays `GROUNDED` on an unparseable number, `type='unknown'` (still promoted) on
+  an unresolvable period; `normalize_document` batch summary, FY-convention
+  detection + storage + config-default fallback, per-fact failure isolation,
+  idempotent re-runs (no duplicate rows/failures), only `GROUNDED`/`NORMALIZED`
+  processed; provenance chain preserved; a real starter-PDF deterministic check;
+  schema unchanged (`user_version` stays 3). **No LLM, no API key.**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -177,7 +199,7 @@ app/
   config.py     # Settings (pydantic-settings), every tunable
   db.py         # connect / init_db / transaction + forward-only migrations
   schema.sql    # genesis schema (user_version 0)
-  migrations/   # NNNN_*.sql forward-only migrations (0001 Phase 2, 0002 Phase 3)
+  migrations/   # NNNN_*.sql forward-only migrations (0001 Phase 2, 0002 Phase 3, 0003 Phase 5)
   main.py       # FastAPI app + /health
   models.py     # pydantic models (grows per phase)
   ingest.py     # Phase 2 — corpus-agnostic PDF ingestion service (ingest_pdf)
@@ -185,9 +207,10 @@ app/
   extract.py    # Phase 4 — candidate fact extraction (extract_document, extraction_summary)
   llm.py        # Phase 4 — thin Anthropic client (AnthropicExtractor)
   verify.py     # Phase 5 — deterministic evidence verification (verify_document, verify_fact)
+  normalize.py  # Phase 6 — deterministic numeric/date/unit/period normalization (normalize_document)
   prompts/      # versioned extraction prompts (extraction_v1.md)
 scripts/        # smoke_extract.py — live extraction smoke test (needs ANTHROPIC_API_KEY)
-tests/          # config, db, health, ingestion, facts, extraction, verification (+ conftest, fakes)
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

@@ -294,3 +294,41 @@ class DocVerificationSummary(BaseModel):
     errors: int = 0
     by_method: dict[str, int] = Field(default_factory=dict)
     error: str | None = None
+
+
+# --- Phase 6: context / numeric / date / unit normalization -----------
+
+class NormalizationResult(BaseModel):
+    """Outcome of ``app.normalize.apply_normalization`` for one fact. Deterministic."""
+
+    fact_id: int
+    lifecycle_state: str                     # 'NORMALIZED' on success, else 'GROUNDED'
+    numeric_normalized: bool = False
+    period_type: str | None = None           # None = no period; 'unknown' = unresolvable
+    base_value: float | None = None
+    magnitude_factor: float | None = None
+    currency: str | None = None
+    unit_norm: str | None = None
+    failed: bool = False
+    reason: str | None = None                # 'numeric_unparseable' etc.
+
+
+class DocNormalizationSummary(BaseModel):
+    """Outcome of ``app.normalize.normalize_document`` — lightweight observability
+    (see also ``app.normalize.normalization_summary``)."""
+
+    run_id: int
+    document_id: int
+    status: str
+    examined: int = 0
+    normalized: int = 0
+    numeric_normalized: int = 0
+    period_resolved: int = 0
+    period_unknown: int = 0
+    period_absent: int = 0
+    normalization_failed: int = 0
+    errors: int = 0
+    by_period_type: dict[str, int] = Field(default_factory=dict)
+    fy_convention: str = "unknown"
+    fy_convention_source: str = "config_default"
+    error: str | None = None

@@ -36,9 +36,28 @@ per-document rules baked into the pipeline. The normalizer:
 
 A manual `fy_convention` override exists **only as an administrative escape
 hatch** (`documents.fy_convention_source='override'`), never as a required step
-in normal processing. Fiscal-year detection and interpretation belong to the
-normalization phase (Phase 6); the Phase 2 ingestion layer does not interpret
-fiscal years — `documents.fy_convention` stays `unknown` / `config_default`.
+in normal processing.
+
+**Phase 6 (done)** implements this in `app/normalize.py`:
+
+- `detect_fy_convention` reads the document's own text for "financial / fiscal
+  year end(ed|ing) … <Month>". A March end → `apr-mar`, December → `jan-dec`,
+  June → `jul-jun`. **Any other end‑month (e.g. September) is not representable**
+  in the `fy_convention` CHECK and is left `unknown` rather than approximated —
+  the affected periods then normalize to `type='unknown'` and are not promoted to
+  reasoning. Widening the vocabulary is an additive migration if a corpus needs
+  it.
+- When detection finds nothing, the document's convention falls back to
+  `settings.fy_convention_default` (`apr-mar`) with
+  `fy_convention_source='config_default'`. This is a **starting default, not a
+  claim about the document** — it is recorded on the row so a reviewer can see
+  which facts rest on an assumed convention, and an `override` supersedes it.
+- Date parsing in `parse_period` / `_parse_date` is a **hand-written matcher**
+  (ISO, `DD-MM-YYYY`, `DD Mon YYYY`, `Mon 'YY`, `Month YYYY`, bare year). It is
+  deliberately narrow: an unrecognised phrase yields `type='unknown'` (preserved
+  ambiguity), never a guessed date. Locale-specific or highly irregular period
+  phrasing outside this set is a known coverage gap — the failure mode is a
+  non-promoted fact, not a wrong one.
 
 ## Contradiction availability in the starter data
 
