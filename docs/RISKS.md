@@ -87,6 +87,26 @@ AGPL-licensed. That is acceptable for a hiring-assignment prototype. It would ne
 review before any closed-source commercial reuse (alternatives: `pypdfium2`,
 `pdfminer.six`). Noted as a future consideration; not changed.
 
+## CHECK-constraint changes need a table rebuild (SQLite)
+
+SQLite cannot alter a `CHECK` constraint in place, so migration 2 (Phase 3)
+rebuilds `facts` and `evidence` with the standard table-redefinition procedure
+(create new / `INSERT … SELECT` / drop / rename, foreign keys briefly off inside a
+transaction, `PRAGMA foreign_key_check` verified after). This is safe now because
+those tables carry no rows until Phase 4 — the copy is empty. Once real facts
+exist, a future `CHECK` change would copy live data: still correct with this
+procedure, but slower and higher-stakes, so closed vocabularies (`fact_type`,
+`lifecycle_state`, relationship `category`) should be treated as near-frozen.
+Additive changes (`ADD COLUMN`, new tables) remain cheap and are preferred.
+
+## Undirected relationship storage
+
+Relationships are stored canonically as `(min, max)` fact id — undirected, one
+row per pair. The five categories in this assignment are effectively symmetric
+for storage. Where direction matters (old→new for `TEMPORAL_EVOLUTION`) it is
+derived from the two facts' `reporting_period_*` at reasoning time, not stored on
+the edge. If a later phase needs a first-class direction, that is an `ADD COLUMN`.
+
 ## Test-dependency hardening
 
 `starlette >= 1.6` prefers the `httpx2` package for its `TestClient`; adding

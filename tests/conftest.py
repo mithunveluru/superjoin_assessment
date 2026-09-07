@@ -4,6 +4,7 @@ directories so nothing touches the project's real ``data/`` or ``uploads/``."""
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -75,5 +76,44 @@ def make_pdf(tmp_path) -> PdfFactory:
         doc.save(out)
         doc.close()
         return out
+
+    return _make
+
+
+@pytest.fixture
+def make_source(conn) -> Callable[..., dict]:
+    """Insert a synthetic document + pages + one chunk per page directly (no
+    PDF). Returns {document_id, page_ids, chunk_ids, page_texts}. Used by the
+    Phase 3 persistence tests, which need a source layer but not real parsing."""
+
+    def _make(page_texts: list[str]) -> dict:
+        sha = (uuid.uuid4().hex + uuid.uuid4().hex)[:64]
+        document_id = conn.execute(
+            "INSERT INTO documents (sha256, stored_path, page_count, status, uploaded_at) "
+            "VALUES (?, ?, ?, 'ingested', ?)",
+            (sha, f"uploads/{sha}.pdf", len(page_texts), "2026-01-01T00:00:00Z"),
+        ).lastrowid
+        page_ids, chunk_ids = [], []
+        for i, text in enumerate(page_texts):
+            pid = conn.execute(
+                "INSERT INTO pages (document_id, page_index, text, char_count, extraction_status) "
+                "VALUES (?, ?, ?, ?, 'TEXT_EXTRACTED')",
+                (document_id, i, text, len(text)),
+            ).lastrowid
+            cid = conn.execute(
+                "INSERT INTO chunks "
+                "(document_id, page_index, seq, char_offset, char_end, text) "
+                "VALUES (?, ?, 0, 0, ?, ?)",
+                (document_id, i, len(text), text),
+            ).lastrowid
+            page_ids.append(pid)
+            chunk_ids.append(cid)
+        conn.commit()
+        return {
+            "document_id": document_id,
+            "page_ids": page_ids,
+            "chunk_ids": chunk_ids,
+            "page_texts": page_texts,
+        }
 
     return _make

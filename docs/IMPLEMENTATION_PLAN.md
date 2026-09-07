@@ -10,14 +10,14 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 not started.
 
 | Phase | Title |
 |---|---|
 | 0 | Architecture / design — ✅ |
 | 1 | Foundation + configuration + SQLite schema + tests — ✅ |
 | 2 | PDF ingestion + page‑preserving extraction — ✅ |
-| 3 | Fact / evidence model + persistence |
+| 3 | Fact / evidence model + persistence — ✅ |
 | 4 | Candidate fact extraction |
 | 5 | Evidence verification + quarantine |
 | 6 | Context + numeric / date / unit normalization |
@@ -45,7 +45,9 @@ app/
   __init__.py
   config.py        # Settings (pydantic-settings), all tunables, env-backed
   db.py            # connect / init_db / transaction  (no ORM, no repo layer)
-  schema.sql       # the whole schema, one readable file
+  schema.sql       # genesis schema (user_version 0)
+  migrations/      # NNNN_*.sql forward-only migrations (0001 Phase 2, 0002 Phase 3)
+  facts.py         # Phase 3 — fact/evidence/relationship persistence + validation
   main.py          # FastAPI app + /health  (routes added Phase 11)
   models.py        # pydantic response/request models (grows per phase)
   ingest.py        # Phase 2
@@ -187,24 +189,43 @@ or document; blank/low/error pages classified and flagged; expected errors raise
 
 ---
 
-## PHASE 3 — Fact / evidence model + persistence
+## PHASE 3 — Fact / evidence model + persistence  ✅ COMPLETE
 
-**Objective:** typed write/read layer for `facts`, `evidence`, `raw_extractions`,
-`failures`; `facts_fts` kept in sync by explicit upsert; lifecycle transitions
-are functions, not free `UPDATE`s.
-**Files:** `app/models.py` (full `FactIn/Out`, `EvidenceIn/Out`), `app/db.py`
-helpers, `tests/test_facts_store.py`.
-**Tasks:** `insert_candidate_fact(raw_extraction_id, fact, evidence_stub)`;
-`set_grounded(fact_id, evidence)`, `set_normalized(fact_id, norm)`,
-`set_eligible(fact_id)`, `quarantine(fact_id, reason, failure_type)` — each
-enforces the invariants and writes `facts_fts` + `failures` as needed. JSON
-(de)serialization for `scope`/`qualifiers`/`deterministic_signals`.
-**Acceptance:** hand‑built numeric + semantic fact + evidence round‑trip
-byte‑identical incl. JSON and all numeric‑representation columns; FTS finds a fact
-by a word in `object_raw`; `quarantine()` sets state + `reasoning_eligible=0` +
-inserts a `failures` row; invariant violations rejected by the helpers, not just
-the DB.
-**Gate:** both fact types + full lifecycle representable; failure surface wired.
+**Objective:** the durable, corpus-agnostic write/validate layer for facts,
+evidence, and (future) relationships. No LLM, no extraction, no inference.
+**Files shipped:** `app/migrations/0002_phase3_fact_evidence_model.sql`
+(migration 2); `app/db.py` (migrations loaded from `app/migrations/*.sql`,
+`_apply_migrations` now runs `PRAGMA foreign_key_check`); `app/models.py`
+(`FactIn` / `EvidenceIn` / `RelationshipIn` + the `Literal` vocabularies);
+`app/facts.py` (`insert_fact`, `attach_evidence`, `evidence_chain`,
+`set_lifecycle`, `mark_reasoning_eligible`, `quarantine_fact`, `add_relationship`,
+`FactError`, the `FACT_TYPES`/`LIFECYCLE_STATES`/… constants);
+`tests/conftest.py` (`make_source` synthetic document/page/chunk factory);
+`tests/test_facts.py` (40 tests).
+**Schema (migration 2):** one canonical fact model for all types —
+`facts.fact_type` widened to `numeric|semantic|temporal|categorical`;
+`lifecycle_state` gains `RAW`; `facts.raw_payload` (per-fact pre-normalization
+extractor output); `evidence.page_id`/`chunk_id` FKs for the explicit
+FACT→EVIDENCE→(CHUNK→)PAGE→DOCUMENT chain; `evidence.verification_method` gains
+`unavailable`; `evidence` CHECK `char_start < char_end`. Rebuild via the SQLite
+table-redefinition procedure (empty tables), `foreign_key_check` verified.
+Context (unit/currency/period/scope/qualifiers/**modality**) and the four
+provenance concepts were already columns from Phase 1 — unchanged.
+**Evidence invariant:** `mark_reasoning_eligible` promotes a fact to
+`ELIGIBLE_FOR_REASONING` **only if** `evidence_chain()` resolves to a document
+**and** `evidence_status ∈ (VERIFIED, PARTIAL)`; the two Phase-1 cross-column
+CHECKs are the storage backstop. `add_relationship` refuses non-eligible facts.
+**Acceptance (met):** all four fact types persist; numeric raw + normalized
+representation and `raw_payload` round-trip; `facts_fts` populated on insert; the
+full chain is validated (page∈doc, chunk∈page, offsets∈`[0,len(text)]`,
+start<end); every lifecycle state accepted, invalid ones rejected; an
+UNVERIFIED / evidence-less fact cannot become eligible (helper *and* DB CHECK); a
+grounded VERIFIED fact can; all five relationship categories persist, invalid
+ones rejected, self-relationship rejected, pair canonicalised, duplicates a
+deterministic no-op. Migration idempotent and correct from genesis-only and
+Phase-2 states. All synthetic data — no starter PDFs.
+**Gate:** canonical fact model + full lifecycle + traceability invariant +
+relationship storage, all enforced. **Met.**
 
 ---
 

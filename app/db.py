@@ -3,8 +3,11 @@ transactions. No ORM, no DAO layer — callers use ``sqlite3`` rows directly.
 
 ``schema.sql`` is the genesis schema (``PRAGMA user_version = 0``). Every change
 after Phase 1 is an entry in ``_MIGRATIONS`` applied in order and recorded in
-``user_version``; fresh databases and Phase-1 databases converge to the same
-shape. Migrations are additive and backward-compatible.
+``user_version``; fresh databases and Phase-1/2 databases converge to the same
+shape. Migrations are additive where possible; a CHECK-constraint change uses the
+SQLite table-redefinition procedure (create new / copy / drop / rename) with
+foreign keys briefly disabled and ``PRAGMA foreign_key_check`` verified after —
+safe because the affected tables carry no rows until Phase 4 writes facts.
 """
 
 from __future__ import annotations
@@ -17,29 +20,17 @@ from pathlib import Path
 from app.config import get_settings
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 
-# (version, SQL). Applied when PRAGMA user_version < version. Keep each block
-# additive (ADD COLUMN, CREATE ... IF NOT EXISTS) so it is safe on any prior DB.
+# Forward-only migrations, applied when PRAGMA user_version < version. Each SQL
+# file lives in app/migrations/ so it stays readable and out of the linter's way.
+_MIGRATION_FILES: list[tuple[int, str]] = [
+    (1, "0001_phase2_ingestion.sql"),
+    (2, "0002_phase3_fact_evidence_model.sql"),
+]
 _MIGRATIONS: list[tuple[int, str]] = [
-    (
-        1,
-        # Phase 2: PDF ingestion metadata + per-page source-quality signal +
-        # explicit chunk end offset.
-        """
-        ALTER TABLE documents ADD COLUMN file_size INTEGER;
-        ALTER TABLE documents ADD COLUMN mime_type TEXT;
-
-        ALTER TABLE pages ADD COLUMN extraction_status TEXT NOT NULL
-            DEFAULT 'TEXT_EXTRACTED'
-            CHECK (extraction_status IN
-                   ('TEXT_EXTRACTED','LOW_TEXT','EMPTY','EXTRACTION_ERROR'));
-        ALTER TABLE pages ADD COLUMN extraction_error TEXT;
-        -- extraction_meta JSON: block_count, image_count, text_density, printed_label_candidate
-        ALTER TABLE pages ADD COLUMN extraction_meta  TEXT;
-
-        ALTER TABLE chunks ADD COLUMN char_end INTEGER;      -- char_offset is the start
-        """,
-    ),
+    (version, (MIGRATIONS_DIR / name).read_text(encoding="utf-8"))
+    for version, name in _MIGRATION_FILES
 ]
 
 CURRENT_SCHEMA_VERSION = _MIGRATIONS[-1][0] if _MIGRATIONS else 0
@@ -68,6 +59,12 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         if target <= version:
             continue
         conn.executescript(sql)
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                f"migration {target} left foreign-key violations: "
+                f"{[tuple(v) for v in violations[:5]]}"
+            )
         conn.execute(f"PRAGMA user_version = {int(target)}")  # PRAGMA can't be parameterised
         version = target
 

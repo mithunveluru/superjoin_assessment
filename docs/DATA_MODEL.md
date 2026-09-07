@@ -5,18 +5,25 @@ text. JSON columns are `TEXT` holding a JSON value. `CHECK` constraints encode t
 controlled vocabularies so bad states fail at the storage layer.
 
 This document is **authoritative for the current schema** — the Phase 1 genesis
-schema (`app/schema.sql`, `user_version 0`) plus Phase 2 migration 1
-(`app/db.py`); see the *Schema migrations* section at the end. Column names may be
-adjusted in implementation but the shape, constraints, and invariants are fixed.
+schema (`app/schema.sql`, `user_version 0`) plus migrations in
+`app/migrations/` (Phase 2 migration 1, Phase 3 migration 2); see the *Schema
+migrations* section at the end. Column names may be adjusted in implementation
+but the shape, constraints, and invariants are fixed. The write/validate layer is
+`app/facts.py` (`insert_fact`, `attach_evidence`, `mark_reasoning_eligible`,
+`quarantine_fact`, `set_lifecycle`, `add_relationship`, `evidence_chain`), with
+input DTOs `FactIn` / `EvidenceIn` / `RelationshipIn` in `app/models.py`.
 
 ## Design principles (post‑review)
 
+- **One canonical fact model** for numeric, semantic, temporal, and categorical
+  facts (`fact_type`). The numeric-representation columns are simply unused for
+  non-numeric facts — there are not two fact systems.
 - **Explicit fact lifecycle**, not a boolean. `lifecycle_state` ∈
-  `CANDIDATE → GROUNDED → NORMALIZED → ELIGIBLE_FOR_REASONING`, with
+  `RAW → CANDIDATE → GROUNDED → NORMALIZED → ELIGIBLE_FOR_REASONING`, with
   `QUARANTINED` as a terminal side state. Failed facts are **kept and
   inspectable**, never deleted.
 - **Verification is described, not scored.** `evidence.verification_method`
-  (`exact | normalized_exact | fuzzy | unverified`) + `evidence_status`
+  (`exact | normalized_exact | fuzzy | unavailable | unverified`) + `evidence_status`
   (`VERIFIED | PARTIAL | UNVERIFIED`) + `numeric_rederivation`
   (`not_applicable | success | failed`) are the primary record. `evidence_score`
   is optional and only set when derived from explicit measurable signals.
@@ -40,11 +47,20 @@ adjusted in implementation but the shape, constraints, and invariants are fixed.
 
 1. `lifecycle_state='QUARANTINED'` ⇒ `reasoning_eligible=0`. *(CHECK)*
 2. `reasoning_eligible=1` ⇒ `evidence_status != 'UNVERIFIED'`. *(CHECK)*
-3. `relationships.fact_a_id < fact_b_id`. *(CHECK)* — canonical pair order.
+3. `relationships.fact_a_id < fact_b_id`. *(CHECK)* — canonical (undirected) pair
+   order; also forbids self-relationships.
 4. Only facts with `reasoning_eligible=1` may appear in `relationships`.
-   *(enforced in the reasoning layer + eval guard test, not a CHECK)*
-5. Every `fact` has exactly one `evidence` row once it reaches `GROUNDED`.
-   *(unique FK + layer logic)*
+   *(enforced by `add_relationship` — raises `not_reasoning_eligible` — + the eval
+   guard test; not a CHECK)*
+5. **Evidence traceability:** a fact reaches `ELIGIBLE_FOR_REASONING` only if
+   `evidence_chain()` resolves FACT → EVIDENCE → (CHUNK →) PAGE → DOCUMENT **and**
+   `evidence_status ∈ (VERIFIED, PARTIAL)`. *(enforced by
+   `mark_reasoning_eligible`; the two CHECKs above are the storage-level backstop)*
+6. `evidence`: `char_start IS NULL OR char_end IS NULL OR char_start < char_end`.
+   *(CHECK)* — `attach_evidence` additionally rejects offsets outside
+   `[0, len(pages.text)]` and unpaired start/end.
+7. Every `fact` has at most one `evidence` row (`evidence.fact_id UNIQUE`);
+   `attach_evidence` is insert-only in Phase 3 (updates arrive in Phase 5).
 
 ---
 
@@ -128,11 +144,24 @@ When Phase 4 introduces a header prefix, the mapping becomes
 ## Schema migrations
 
 `app/schema.sql` is the genesis schema (`PRAGMA user_version = 0`). Every change
-after Phase 1 is an additive, forward-only entry in `app/db._MIGRATIONS` keyed by
-`user_version`; `init_db()` applies pending ones in order. Fresh databases,
-Phase-1 databases, and fully-migrated databases all converge. **Migration 1**
-(Phase 2) adds the columns marked above — all `ADD COLUMN` / nullable-or-defaulted,
-no table rewrites, no data loss.
+after Phase 1 is a forward-only `app/migrations/NNNN_*.sql` file, listed in
+`app/db._MIGRATION_FILES` and keyed by `user_version`; `init_db()` applies pending
+ones in order and runs `PRAGMA foreign_key_check` after each. Fresh databases,
+Phase-1, Phase-2, and fully-migrated databases all converge; re-running is a
+no-op.
+
+- **Migration 1** (Phase 2, `0001_phase2_ingestion.sql`) — `ADD COLUMN` only:
+  `documents.file_size/mime_type`, `pages.extraction_status/error/meta`,
+  `chunks.char_end`. Nullable-or-defaulted, no rewrite, no data loss.
+- **Migration 2** (Phase 3, `0002_phase3_fact_evidence_model.sql`) — a CHECK
+  change, so `facts` and `evidence` are rebuilt with the SQLite
+  table-redefinition procedure (create new / `INSERT … SELECT` / drop / rename)
+  under `PRAGMA foreign_keys=OFF` inside a transaction, `foreign_key_check`
+  verified after. Widens `facts.fact_type` (2→4) and `facts.lifecycle_state`
+  (+`RAW`), adds `facts.raw_payload`; adds `evidence.page_id/chunk_id`, the
+  `char_start < char_end` CHECK, and `verification_method='unavailable'`. All
+  `facts` / `evidence` indexes are recreated. Safe: both tables are empty until
+  Phase 4.
 
 ## runs  — processing observability
 
@@ -222,15 +251,15 @@ No dataset‑specific alias rows are ever seeded (DECISIONS D8/G).
 | document_id | INTEGER NOT NULL → documents(id) ON DELETE CASCADE | |
 | page_index | INTEGER NOT NULL | |
 | run_id | INTEGER → runs(id) ON DELETE SET NULL | |
-| raw_extraction_id | INTEGER → raw_extractions(id) ON DELETE SET NULL | link to verbatim LLM output |
-| **lifecycle_state** | TEXT NOT NULL DEFAULT `CANDIDATE` | CHECK ∈ (`CANDIDATE`,`GROUNDED`,`NORMALIZED`,`ELIGIBLE_FOR_REASONING`,`QUARANTINED`) |
+| raw_extraction_id | INTEGER → raw_extractions(id) ON DELETE SET NULL | link to the chunk-level verbatim LLM output |
+| **lifecycle_state** | TEXT NOT NULL DEFAULT `CANDIDATE` | CHECK ∈ (`RAW`,`CANDIDATE`,`GROUNDED`,`NORMALIZED`,`ELIGIBLE_FOR_REASONING`,`QUARANTINED`) *(migration 2 adds `RAW`)* |
 | quarantine_reason | TEXT | required when `QUARANTINED` (layer‑enforced) |
 | subject_raw | TEXT NOT NULL | entity string as written |
 | subject_entity_id | INTEGER → entities(id) ON DELETE SET NULL | nullable until resolved |
 | predicate | TEXT NOT NULL | short phrase as written |
 | predicate_norm | TEXT NOT NULL DEFAULT '' | lowercased/lemmatized, for blocking |
 | object_raw | TEXT NOT NULL | value/object as written |
-| fact_type | TEXT NOT NULL | CHECK ∈ (`numeric`,`semantic`) |
+| fact_type | TEXT NOT NULL | CHECK ∈ (`numeric`,`semantic`,`temporal`,`categorical`) *(migration 2 widens from 2 → 4)* |
 | — numeric representation — | | *(all nullable; populated for `numeric`)* |
 | value_raw | TEXT | e.g. `"₹8,142 crore"` |
 | numeric_value | REAL | e.g. `8142` |
@@ -260,6 +289,7 @@ No dataset‑specific alias rows are ever seeded (DECISIONS D8/G).
 | prompt_version | TEXT | |
 | extraction_temperature | REAL | |
 | extracted_at | TEXT | |
+| raw_payload | TEXT (JSON) | the extractor's original structured output **for this one fact**, pre-normalization — answers "what did the extractor produce?" *(migration 2)* |
 | — vectors (nullable until Phase 8) — | | |
 | embedding | BLOB | float32 vector of "subject predicate object + context" |
 | predicate_embedding | BLOB | float32 vector of `predicate` |
@@ -268,6 +298,11 @@ No dataset‑specific alias rows are ever seeded (DECISIONS D8/G).
 Cross‑column CHECKs:
 `CHECK (lifecycle_state != 'QUARANTINED' OR reasoning_eligible = 0)`,
 `CHECK (reasoning_eligible = 0 OR evidence_status != 'UNVERIFIED')`.
+
+**`fact_type` extensibility:** the four values cover numeric / semantic /
+temporal / categorical. A CHECK keeps them consistent with `app/models.py` and
+`app/facts.FACT_TYPES`; adding a fifth type is a one-file migration
+(`facts` currently rebuilds in milliseconds — it is empty until Phase 4).
 
 Indexes: `facts(document_id)`, `facts(subject_entity_id)`,
 `facts(predicate_norm)`, `facts(fact_type)`, `facts(lifecycle_state)`,
@@ -284,7 +319,9 @@ for a table written in exactly one place.`
 
 ## evidence
 
-One row per fact (1:1 once `GROUNDED`).
+At most one row per fact (`fact_id UNIQUE`). Created by `attach_evidence`, which
+resolves `page_id` and validates the chain (page ∈ document, chunk ∈ page,
+offsets ∈ `[0, len(pages.text)]`).
 
 | column | type | notes |
 |---|---|---|
@@ -292,18 +329,23 @@ One row per fact (1:1 once `GROUNDED`).
 | fact_id | INTEGER NOT NULL UNIQUE → facts(id) ON DELETE CASCADE | |
 | document_id | INTEGER NOT NULL → documents(id) ON DELETE CASCADE | |
 | page_index | INTEGER NOT NULL | |
+| page_id | INTEGER → pages(id) ON DELETE SET NULL | explicit FK for the FACT→…→PAGE chain *(migration 2)* |
+| chunk_id | INTEGER → chunks(id) ON DELETE SET NULL | explicit FK for the FACT→…→CHUNK chain *(migration 2)* |
 | printed_label | TEXT | denormalized from `pages` for display |
 | char_start | INTEGER | into `pages.text` |
 | char_end | INTEGER | |
 | quote | TEXT NOT NULL | verbatim; equals `page.text[char_start:char_end]` when `verification_method ∈ (exact, normalized_exact)` |
 | method | TEXT DEFAULT `text_layer` | CHECK ∈ (`text_layer`,`ocr`) |
-| **verification_method** | TEXT NOT NULL DEFAULT `unverified` | CHECK ∈ (`exact`,`normalized_exact`,`fuzzy`,`unverified`) |
+| **verification_method** | TEXT NOT NULL DEFAULT `unverified` | CHECK ∈ (`exact`,`normalized_exact`,`fuzzy`,`unavailable`,`unverified`) *(migration 2 adds `unavailable` = could not attempt, vs `unverified` = attempted, not found)* |
 | fuzzy_score | REAL | set only when `verification_method='fuzzy'` |
 | **numeric_rederivation** | TEXT NOT NULL DEFAULT `not_applicable` | CHECK ∈ (`not_applicable`,`success`,`failed`) |
 | **evidence_status** | TEXT NOT NULL DEFAULT `UNVERIFIED` | CHECK ∈ (`VERIFIED`,`PARTIAL`,`UNVERIFIED`) |
 | evidence_score | REAL | OPTIONAL — only if computed from explicit signals; may be NULL |
 | notes | TEXT | human‑readable "why verified/partial/failed" for the UI |
 | created_at | TEXT NOT NULL | |
+
+Table CHECK: `char_start IS NULL OR char_end IS NULL OR char_start < char_end`
+*(migration 2)*.
 
 Status derivation (implemented Phase 5, documented here):
 
@@ -313,9 +355,14 @@ Status derivation (implemented Phase 5, documented here):
 | `exact` / `normalized_exact` | `failed` | **PARTIAL** (quote real, number not re‑derivable) |
 | `fuzzy` | `not_applicable` / `success` | **PARTIAL** |
 | `fuzzy` | `failed` | **UNVERIFIED** |
-| `unverified` | any | **UNVERIFIED** |
+| `unavailable` / `unverified` | any | **UNVERIFIED** |
 
-Index: `evidence(document_id, page_index)`.
+Index: `evidence(document_id, page_index)`, `evidence(page_id)`,
+`evidence(chunk_id)`.
+
+Phase 3 (this phase) persists evidence and validates the chain. It does **not**
+determine `verification_method` by comparing `quote` to `pages.text` — that is
+Phase 5 (evidence verification).
 
 ## relationships
 
@@ -341,6 +388,23 @@ Index: `evidence(document_id, page_index)`.
 Unique: `relationships(fact_a_id, fact_b_id)`. Index: `relationships(category)`,
 `relationships(fact_a_id)`, `relationships(fact_b_id)`, `relationships(run_id)`.
 
+Stored **canonically as `(min, max)` fact id** (undirected) — `add_relationship`
+sorts the pair, rejects `fact_a_id == fact_b_id` (`self_relationship`), and on a
+repeated pair is a deterministic no-op returning the existing row's id (first
+write wins). Direction, where it matters (e.g. old→new for `TEMPORAL_EVOLUTION`),
+is derivable from the two facts' `reporting_period_*`. **Phase 3 only persists —
+nothing is inferred; no relationship is created from the starter PDFs.**
+
+### Relationship semantics (intended meaning — the reasoning phase applies these)
+
+| category | meaning |
+|---|---|
+| `CORROBORATES` | two facts describe materially the same claim after normalization / context alignment |
+| `CONTRADICTS` | two facts are materially incompatible under sufficiently comparable context |
+| `DIFFERENT_CONTEXT` | the apparent mismatch is explained by a legitimate contextual dimension — scope, unit, reporting basis, definition (UI: "Reconciled by context") |
+| `TEMPORAL_EVOLUTION` | the facts differ because the underlying state changed over time (different dates ≠ contradiction) |
+| `UNCERTAIN` | available evidence / context is insufficient to classify confidently |
+
 ## failures  — unified inspectable failure surface
 
 Points at whatever failed; nothing is discarded.
@@ -365,7 +429,8 @@ Index: `failures(run_id)`, `failures(failure_type)`.
 
 | lifecycle_state | set by phase | evidence_status | reasoning_eligible | in `relationships`? |
 |---|---|---|---|---|
-| `CANDIDATE` | 4 (extraction) | `UNVERIFIED` | 0 | no |
+| `RAW` | reserved (transition not yet used) | `UNVERIFIED` | 0 | no |
+| `CANDIDATE` | 4 (extraction) — default on insert | `UNVERIFIED` | 0 | no |
 | `GROUNDED` | 5 (verification) | `VERIFIED` / `PARTIAL` | 0 | no |
 | `NORMALIZED` | 6 (normalization) | `VERIFIED` / `PARTIAL` | 0 | no |
 | `ELIGIBLE_FOR_REASONING` | 6→7 (after normalize + entity link) | `VERIFIED` / `PARTIAL` | 1 | yes |

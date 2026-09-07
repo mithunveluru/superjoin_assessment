@@ -29,15 +29,20 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–2 of 15 complete; Phase 3 not started.** This repo contains
+> **Status: Phases 1–3 of 15 complete; Phase 4 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
-> forward-only migration mechanism), database utilities, a health check, and a
+> forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer** (PDF → document → pages →
 > page-preserving text → deterministic chunks, with character-offset
-> traceability). No LLM, fact-extraction, normalization, entity-resolution,
-> retrieval, or relationship-reasoning code exists yet — those are later phases,
-> see [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate
-> design positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
+> traceability), and the **canonical fact + evidence + relationship persistence
+> model** (`app/facts.py`) — one fact model for numeric/semantic/temporal/
+> categorical facts, an explicit `RAW→…→ELIGIBLE_FOR_REASONING` lifecycle, and
+> the enforced invariant that a fact reaches the reasoning layer only with a
+> traceable FACT→EVIDENCE→(CHUNK→)PAGE→DOCUMENT chain. No LLM, fact-extraction,
+> normalization, entity-resolution, retrieval, or relationship-*inference* code
+> exists yet — those are later phases, see
+> [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
+> positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
 ## Design docs
 
@@ -107,9 +112,19 @@ pytest
   page, optional printed-label detection, `LOW_TEXT` / `EMPTY` /
   `EXTRACTION_ERROR` page detection, expected-error handling, and safe file
   handling (unsafe filenames cannot escape the uploads directory).
+- **Phase 3** covers: migration 2 (schema climbs from any prior state,
+  idempotent, FK-checked), persistence of all four fact types, raw + normalized
+  numeric representation and `raw_payload` round-trips, the FACT→EVIDENCE→
+  (CHUNK→)PAGE→DOCUMENT chain validation (bad page/chunk links and out-of-range
+  or unpaired offsets rejected), the lifecycle state machine, the
+  reasoning-eligibility / evidence invariant (an UNVERIFIED or evidence-less
+  fact cannot become eligible — helper *and* DB CHECK), and relationship storage
+  (five categories, canonical pair order, self-relationship rejected, duplicates
+  a deterministic no-op).
 
-Unit tests use small synthetic PDFs; the provided starter PDFs are used only for
-manual smoke tests and are kept locally (git-ignored), not committed.
+Unit tests use small synthetic PDFs / synthetic source rows; the provided starter
+PDFs are used only for manual smoke tests and are kept locally (git-ignored), not
+committed.
 
 ## Configuration
 
@@ -133,11 +148,13 @@ name. Key groups:
 app/
   config.py     # Settings (pydantic-settings), every tunable
   db.py         # connect / init_db / transaction + forward-only migrations
-  schema.sql    # genesis schema (user_version 0); later changes are migrations in db.py
+  schema.sql    # genesis schema (user_version 0)
+  migrations/   # NNNN_*.sql forward-only migrations (0001 Phase 2, 0002 Phase 3)
   main.py       # FastAPI app + /health
   models.py     # pydantic models (grows per phase)
   ingest.py     # Phase 2 — corpus-agnostic PDF ingestion service (ingest_pdf)
-tests/          # config, db/schema, health, ingestion (+ conftest synthetic-PDF factory)
+  facts.py      # Phase 3 — fact/evidence/relationship persistence + validation
+tests/          # config, db/schema, health, ingestion, facts (+ conftest factories)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```
