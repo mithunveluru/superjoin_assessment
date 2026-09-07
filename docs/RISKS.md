@@ -83,6 +83,36 @@ publication gap) with a **constrained** LLM semantic step: the LLM proposes an
 interpretation, deterministic logic validates it against those signals and has
 the final say. Not implemented yet.
 
+## Entity resolution — heuristics with a bias to *not* merge
+
+**Phase 7 (done)** resolves subject surfaces with generic config only (legal
+suffixes, honorifics, anaphora words, rename predicates — no dataset aliases).
+Known limits, each chosen so the failure mode is *under*-merging (a fact stays
+linked to its own entity or to nothing), never a wrong merge:
+
+- **No embeddings.** The planned "name + context cosine" block is deferred to
+  Phase 8 (which needs `facts.embedding` regardless). Until then, two surfaces
+  that are the same entity but share no tokens after normalization (a true
+  rebrand with no rename sentence in the text, an acronym vs its expansion) are
+  **not** merged. `token_set_ratio ≥ 88` still blocks acronym-ish overlaps for
+  the LLM to confirm.
+- **Anaphora → dominant entity.** "the Company" / "the Group" resolve to the
+  document's most-referenced entity. In a filing that discusses a parent *and* a
+  subsidiary at similar frequency this can attach an anaphor to the wrong one;
+  an exact frequency tie yields `entity_ambiguous` (unresolved) instead.
+- **`entity_type` is a one-line guess** (honorific → person, else org); the first
+  surface seen for a `normalization_key` sets it. It is metadata, not used in any
+  gate.
+- **No LLM in this environment.** Every borderline cluster (fuzzy-blocked, not
+  auto-mergeable) is recorded as `entity_ambiguous` and left unresolved. A live
+  `confirm_entities` call is what turns those into merges/splits; the path is
+  covered by tests with a fake confirmer.
+- **Auto-merge threshold** (`token_sort_ratio ≥ 94`) and the block threshold
+  (`token_set_ratio ≥ 88`) are starting values, not tuned against a labelled
+  set — Phase 10's harness is where they get evidence. Both are conservative:
+  auto-merge is order/length-sensitive, so subset names ("<name>" vs
+  "<name> Robotics") fall well short.
+
 ## PDF layout / context separation
 
 In real filings, tables, multi-column layouts, running headers, footnotes, and

@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings
-from app.models import LLMExtraction, RawExtraction
+from app.models import EntityConfirmation, LLMExtraction, RawExtraction
 
 PROMPTS_DIR = Path(__file__).with_name("prompts")
 
@@ -63,8 +63,8 @@ EXTRACTION_JSON_SCHEMA = {
 }
 
 
-def load_prompt(version: str) -> str:
-    return (PROMPTS_DIR / f"extraction_{version}.md").read_text(encoding="utf-8")
+def load_prompt(version: str, kind: str = "extraction") -> str:
+    return (PROMPTS_DIR / f"{kind}_{version}.md").read_text(encoding="utf-8")
 
 
 def _parse_response_text(text: str) -> tuple[RawExtraction | None, str | None]:
@@ -163,3 +163,76 @@ class AnthropicExtractor:
             model=self.model, prompt_version=self.prompt_version, stop_reason=stop,
             input_tokens=in_tok, output_tokens=out_tok,
         )
+
+
+# --- Phase 7: entity-cluster confirmation ---------------------------------------
+_ENTITY_CONFIRM_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["same", "confidence"],
+    "properties": {
+        "same": {"type": "boolean"},
+        "confidence": {"type": "number"},
+        "canonical_label": {"type": ["string", "null"]},
+        "groups": {
+            "type": ["array", "null"],
+            "items": {"type": "array", "items": {"type": "string"}},
+        },
+        "reasoning": {"type": ["string", "null"]},
+    },
+}
+
+
+class AnthropicEntityConfirmer:
+    """Confirms/splits ONE borderline entity cluster. Same lazy-import, no-sampling
+    shape as ``AnthropicExtractor``; never used from tests (they inject a fake)."""
+
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or get_settings()
+        self.model = self.settings.llm_model
+        self.prompt_version = self.settings.entity_prompt_version
+        self._system = load_prompt(self.prompt_version, kind="entity_confirm")
+        import anthropic
+
+        self._anthropic = anthropic
+        self._client = anthropic.Anthropic(timeout=self.settings.llm_timeout_seconds)
+
+    def confirm_entities(self, surfaces: list[str], context: str = "") -> EntityConfirmation:
+        a = self._anthropic
+        user = (
+            "Surfaces (decide if these are one entity):\n"
+            + "\n".join(f"- {s}" for s in surfaces)
+            + (f"\n\nContext:\n{context}" if context else "")
+        )
+        try:
+            resp = self._client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                system=self._system,
+                messages=[{"role": "user", "content": user}],
+                output_config={
+                    "effort": self.settings.llm_effort,
+                    "format": {"type": "json_schema", "schema": _ENTITY_CONFIRM_SCHEMA},
+                },
+            )
+        except (a.AuthenticationError, a.RateLimitError, a.APITimeoutError,
+                a.APIConnectionError, a.APIStatusError) as e:
+            return EntityConfirmation(same=False, error_code="api_error", error_detail=str(e))
+
+        text = next(
+            (b.text for b in resp.content if getattr(b, "type", None) == "text"), None
+        )
+        if not text:
+            return EntityConfirmation(same=False, error_code="malformed_response",
+                                     error_detail="no text block")
+        try:
+            data = json.loads(text)
+            return EntityConfirmation(
+                same=bool(data["same"]),
+                confidence=float(data.get("confidence") or 0.0),
+                canonical_label=data.get("canonical_label"),
+                groups=data.get("groups"),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            return EntityConfirmation(same=False, error_code="malformed_response",
+                                     error_detail=str(e))

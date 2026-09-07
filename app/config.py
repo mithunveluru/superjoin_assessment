@@ -41,10 +41,37 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 120.0
     prompt_version: str = "v1"       # extraction prompt version (app/prompts/extraction_<v>.md)
 
-    # --- embeddings (used from Phase 7) --------------------------------------
+    # --- embeddings (used from Phase 8) --------------------------------------
     embedding_provider: str = "fastembed"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
+
+    # --- entity resolution (Phase 7). All lists are language-generic, never
+    # dataset-specific (no "<brand> -> the Company" style alias seeding). ------
+    entity_prompt_version: str = "v1"           # app/prompts/entity_confirm_<v>.md
+    entity_legal_suffixes: tuple[str, ...] = (
+        "limited", "ltd", "llp", "inc", "incorporated", "corp", "corporation",
+        "company", "co", "plc", "pvt", "private", "gmbh", "sa", "nv", "ag",
+        "pte", "llc", "lp", "group", "holdings", "holding", "sarl", "bv", "oyj",
+    )
+    entity_person_honorifics: tuple[str, ...] = (
+        "mr", "mrs", "ms", "miss", "dr", "prof", "shri", "smt", "sri", "hon",
+        "sir", "mx",
+    )
+    entity_anaphora: tuple[str, ...] = (
+        "the company", "the group", "the issuer", "the bank", "the corporation",
+        "the firm", "the registrant", "our company", "the parent",
+        "the organisation", "the organization", "the entity",
+    )
+    entity_rename_predicates: tuple[str, ...] = (
+        "formerly known as", "formerly", "former name", "changed its name",
+        "changed name", "renamed", "incorporated as", "originally incorporated",
+        "previously known as", "erstwhile", "name was changed",
+    )
+    # rapidfuzz 0-100: token_set_ratio gates the high-recall block, token_sort_ratio
+    # gates an auto-merge that needs no LLM.
+    entity_block_fuzzy_threshold: float = 88.0
+    entity_merge_fuzzy_threshold: float = 94.0
 
     # --- retrieval: starting defaults; tuned by the eval harness (Phase 10) --
     retrieval_top_k: int = 15

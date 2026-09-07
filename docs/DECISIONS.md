@@ -104,8 +104,20 @@ The only lists in config are *language-generic* (legal suffixes, honorifics), no
 **Rejected:** a hand-maintained alias map (forbidden by the assignment); pure LLM
 free-scan over all surface forms (unbounded cost, no blocking); pure fuzzy match
 (merges "Delhivery" with "Delhivery Robotics").
+**As built (Phase 7):** exact `normalization_key` match → deterministic merge;
+`token_set_ratio ≥ 88` is the recall block; `token_sort_ratio ≥ 94` (order- and
+length-sensitive, so a bare name vs "<name> Robotics" scores ~67) is the
+no-LLM auto-merge; anything between goes to one `confirm_entities` call, and with
+no LLM client the surface is left unresolved (`entity_ambiguous`) rather than
+merged. Union-find was not needed — surface counts per document are small, so a
+pairwise pass suffices; the cosine rung and `app/embed.py` moved to Phase 8
+(which needs `facts.embedding` anyway and where `fastembed` gets pulled in).
+Anaphora ("the Company") resolves to the document's dominant entity, not by
+similarity.
 **Revisit when:** cluster precision drops — add a cheap "is X a subsidiary/segment
-of Y, not Y itself" check in the confirm prompt.
+of Y, not Y itself" check in the confirm prompt; add the cosine block once
+`facts.embedding` exists if fuzz-only recall misses reworded different-surface
+names.
 
 ## D9 — Verification is *described*, not scored (revised)
 

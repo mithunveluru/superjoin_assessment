@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 not started.
 
 | Phase | Title |
 |---|---|
@@ -21,7 +21,7 @@ so retrieval/threshold tuning is evidence‑driven.
 | 4 | Candidate fact extraction — ✅ |
 | 5 | Evidence verification + quarantine — ✅ |
 | 6 | Context + numeric / date / unit normalization — ✅ |
-| 7 | Entity resolution |
+| 7 | Entity resolution — ✅ |
 | 8 | Candidate retrieval + deterministic signals |
 | 9 | Relationship reasoning + explanations |
 | 10 | Evaluation harness |
@@ -54,12 +54,13 @@ app/
   extract.py       # Phase 4
   verify.py        # Phase 5 — deterministic evidence verification (verify_document / verify_fact)
   normalize.py     # Phase 6 — deterministic numeric/date/unit/period normalization (normalize_document)
-  entities.py      # Phase 7
+  entities.py      # Phase 7 — deterministic entity resolution + borderline LLM confirm (resolve_document)
+  embed.py         # Phase 8 — embeddings (deferred from Phase 7; retrieval needs facts.embedding)
   retrieve.py      # Phase 8
   signals.py       # Phase 8  (deterministic comparison)
   reason.py        # Phase 9  (LLM proposes; signals.validate() decides)
-  llm.py           # Phase 4 — thin Anthropic wrapper (AnthropicExtractor)
-  prompts/         # versioned extraction prompts (extraction_v1.md)
+  llm.py           # Phase 4 — Anthropic wrappers (AnthropicExtractor, AnthropicEntityConfirmer)
+  prompts/         # versioned prompts (extraction_v1.md, entity_confirm_v1.md)
   pipeline.py      # Phase 11 orchestration
 static/            # Phase 12
 evaluation/
@@ -377,26 +378,56 @@ schema unchanged (`user_version` stays 3). **Met.**
 
 ---
 
-## PHASE 7 — Entity resolution
+## PHASE 7 — Entity resolution  ✅ COMPLETE
 
-**Objective:** general‑purpose resolution: deterministic normalization → blocking
-→ similarity scoring → LLM confirmation for ambiguous clusters only. No
-Delhivery‑specific aliases anywhere in `app/`.
-**Files:** `app/entities.py`, `app/embed.py`, `tests/test_entities.py`.
-**Tasks:** normalize (generic legal‑suffix + honorific lists from config);
-blocking (`token_set_ratio ≥ 88` OR name+context cosine ≥ 0.82); score pairs;
-merge unambiguous pairs deterministically; send only borderline clusters to
-`llm.confirm_entities` (may split); persist `entities` + `entity_aliases`
-(`match_method` recorded). Rename facts (`predicate` ~ "former name"/"incorporated
-as") → alias edges `match_method='derived_fact'`, `source_fact_id` set. Backfill
-`facts.subject_entity_id`; facts that are `NORMALIZED` + entity‑linked (or entity
-unresolved but not required) → `ELIGIBLE_FOR_REASONING`.
-**Acceptance:** {"Delhivery","Delhivery Limited","the Company","SSN Logistics
-Private Limited"} → one entity, one alias `derived_fact`; a distinct person stays
-separate; two clearly different orgs don't merge; the module contains no starter
-entity strings.
+**Objective:** general‑purpose resolution of `facts.subject_raw` surfaces to the
+global `entities` table: deterministic normalization → blocking → auto‑merge or
+borderline‑only LLM confirmation. No dataset‑specific aliases anywhere in `app/`.
+**Files shipped:** `app/entities.py`, `app/prompts/entity_confirm_v1.md`,
+`AnthropicEntityConfirmer` in `app/llm.py`, `tests/test_entities.py` (26 tests).
+No migration — `entities` / `entity_aliases` / `facts.subject_entity_id` are all
+in the genesis schema (`user_version` stays 3). No new dependency (`rapidfuzz`
+already present; **no embeddings** — see deviation).
+**What shipped:**
+- `normalize_name` — lowercase, strip punctuation, strip trailing legal‑form
+  suffixes and leading honorifics (generic `Settings` lists) → `normalization_key`.
+  `guess_type` — honorific prefix → `person`, else `org`.
+- `resolve_document(document_id, *, llm=None)` — opens a `run_type='resolve'`
+  run, then per subject surface:
+  1. exact `normalization_key` match to an existing entity → link, alias
+     `deterministic`;
+  2. fuzzy block `token_set_ratio ≥ entity_block_fuzzy_threshold` (88): if
+     `token_sort_ratio ≥ entity_merge_fuzzy_threshold` (94) → auto‑merge
+     (`similarity`); else if an `llm` confirmer is supplied → `confirm_entities`
+     (merge on `same` + confidence ≥ 0.5, alias `llm`); else → `entity_ambiguous`
+     failure, **surface left unresolved** (never a blind merge);
+  3. no match → new entity (`deterministic`).
+- Rename facts (`predicate` matches a generic `entity_rename_predicates` phrase)
+  → the object becomes an alias `match_method='derived_fact'`, `source_fact_id`
+  set; if the former name already had its own entity the two are merged.
+- Anaphora surfaces (`entity_anaphora` list: "the Company", "the Group", …) →
+  linked to the document's **dominant** entity (most facts; a tie → unresolved).
+- Backfill `facts.subject_entity_id`; every `NORMALIZED` fact with a verified/
+  partial evidence chain → `ELIGIBLE_FOR_REASONING` (entity link recorded, not
+  required). Per‑surface failure isolation; `resolution_summary` observability.
+**Deviation from the original plan:** the "name+context cosine ≥ 0.82" blocking
+rung and `app/embed.py` are **deferred to Phase 8**, which needs
+`facts.embedding` for retrieval regardless. The acceptance cluster resolves on
+deterministic + fuzzy + rename + anaphora alone, and `fastembed` is not
+installed here. Auto‑merge uses `token_sort_ratio` (order/length‑sensitive)
+rather than `token_set_ratio`, which scores a bare name vs "<name> Robotics" at
+100 — the exact false‑merge D8 rejects; `token_set_ratio` stays the recall gate.
+**Acceptance (met):** `{"Delhivery","Delhivery Limited","the Company","SSN
+Logistics Private Limited"}` → one entity, `SSN Logistics…` alias
+`derived_fact` with `source_fact_id`; `{"Mr. Sahil Barua","Sahil Barua"}` stays
+separate from the org; a bare name vs "<name> Robotics" does **not** merge
+without an LLM (`entity_ambiguous`, surface unresolved); a fake confirmer merges
+or splits it on demand; `grep -niE 'delhivery|rbi|…' app/` is clean; cross‑
+document smoke: one entity spans two ingested PDFs, "the Company" in the second
+resolves to it. Idempotent re‑run → identical entities/aliases/links, no new
+failures.
 **Gate:** entities from corpus evidence + generic config only; ambiguous‑only LLM
-use.
+use; schema unchanged. **Met.**
 
 ---
 

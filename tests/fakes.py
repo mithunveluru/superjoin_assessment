@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.models import LLMExtraction, RawExtraction
+from app.models import EntityConfirmation, LLMExtraction, RawExtraction
 
 
 class FakeLLM:
@@ -67,6 +67,34 @@ def candidate(**over: Any) -> dict:
     }
     base.update(over)
     return base
+
+
+class FakeEntityConfirmer:
+    """Same surface as ``app.llm.AnthropicEntityConfirmer``:
+    ``.confirm_entities(surfaces, context) -> EntityConfirmation``.
+
+    ``script`` is consumed one item per call:
+      * ``EntityConfirmation`` -> returned verbatim
+      * ``dict``               -> kwargs for ``EntityConfirmation``
+      * ``Exception``          -> raised
+    Exhausted script -> a conservative ``same=False`` (no merge).
+    """
+
+    model = "fake-sonnet"
+    prompt_version = "test-v1"
+
+    def __init__(self, script: list[Any] | None = None):
+        self.script = list(script or [])
+        self.calls: list[dict] = []
+
+    def confirm_entities(self, surfaces: list[str], context: str = "") -> EntityConfirmation:
+        self.calls.append({"surfaces": list(surfaces), "context": context})
+        item = self.script.pop(0) if self.script else EntityConfirmation(same=False)
+        if isinstance(item, Exception):
+            raise item
+        if isinstance(item, EntityConfirmation):
+            return item
+        return EntityConfirmation(**item)
 
 
 def api_error(code: str = "api_error", detail: str = "boom") -> LLMExtraction:

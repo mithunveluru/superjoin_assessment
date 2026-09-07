@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–6 of 15 complete; Phase 7 not started.** This repo contains
+> **Status: Phases 1–7 of 15 complete; Phase 8 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -51,7 +51,16 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > `*_raw` is never overwritten, an unparseable number leaves the fact `GROUNDED`
 > with a `normalization_failed` record, an unresolvable period becomes
 > `type='unknown'` rather than a guess, and a success promotes `GROUNDED →
-> NORMALIZED`. No entity resolution, retrieval, or
+> NORMALIZED`. **Entity resolution** (`app/entities.py`) then links each fact's
+> subject surface to a row in a global `entities` table using only
+> language-generic config (legal-form suffixes, honorifics, anaphora words,
+> rename predicates — never a dataset alias list): exact normalized-key match and
+> a conservative `rapidfuzz` gate merge deterministically, "formerly known as"
+> facts become `derived_fact` aliases, "the Company" resolves to the document's
+> dominant entity, and only genuinely borderline pairs go to a single
+> `confirm_entities` LLM call (absent a key they are left unresolved, never
+> blind-merged). A `NORMALIZED` fact with verified evidence is then promoted to
+> `ELIGIBLE_FOR_REASONING`. No retrieval or
 > relationship inference exists yet — those are later phases, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
 > positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
@@ -171,6 +180,18 @@ pytest
   idempotent re-runs (no duplicate rows/failures), only `GROUNDED`/`NORMALIZED`
   processed; provenance chain preserved; a real starter-PDF deterministic check;
   schema unchanged (`user_version` stays 3). **No LLM, no API key.**
+- **Phase 7** covers: `normalize_name` / `guess_type` against generic suffix +
+  honorific config; the acceptance cluster (`{name, name + "Limited", "the
+  Company", former name}` → one entity, one `derived_fact` alias with
+  `source_fact_id`); a distinct person kept separate; a bare name vs
+  "<name> Robotics" **not** merged without an LLM (`entity_ambiguous`, surface
+  left unresolved) and merged/split on demand by a fake `confirm_entities`;
+  anaphora with no dominant entity → ambiguous; promotion to
+  `ELIGIBLE_FOR_REASONING` only with a verified evidence chain; only
+  `NORMALIZED`/`ELIGIBLE` subjects resolved; idempotent re-runs (identical
+  entities/aliases/links, no new failures); `resolution_summary`; a grep asserting
+  `app/entities.py` carries no corpus entity strings; a real starter-PDF smoke.
+  Uses a fake confirmer — no API calls. Schema unchanged (`user_version` 3).
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -188,6 +209,7 @@ name. Key groups:
 | storage | `FKL_DATABASE_PATH`, `FKL_UPLOADS_DIR` |
 | LLM | `FKL_LLM_MODEL`, `FKL_LLM_TEMPERATURE`, `ANTHROPIC_API_KEY` |
 | embeddings | `FKL_EMBEDDING_MODEL`, `FKL_EMBEDDING_DIM` |
+| entity resolution | `FKL_ENTITY_LEGAL_SUFFIXES`, `FKL_ENTITY_PERSON_HONORIFICS`, `FKL_ENTITY_ANAPHORA`, `FKL_ENTITY_RENAME_PREDICATES`, `FKL_ENTITY_BLOCK_FUZZY_THRESHOLD`, `FKL_ENTITY_MERGE_FUZZY_THRESHOLD` |
 | retrieval (tuned by the eval harness) | `FKL_RETRIEVAL_TOP_K`, `FKL_RETRIEVAL_CANDIDATE_THRESHOLD`, `FKL_RETRIEVAL_WEIGHT_*` |
 | numeric comparison | `FKL_NUMERIC_EQUIVALENCE_TOLERANCE`, `FKL_NUMERIC_CONTRADICTION_THRESHOLD` |
 | ingestion | `FKL_MAX_UPLOAD_MB`, `FKL_MAX_PAGES`, `FKL_OCR_MIN_CHARS`, `FKL_CHUNK_TARGET_CHARS`, `FKL_CHUNK_OVERLAP_CHARS` |
@@ -205,12 +227,13 @@ app/
   ingest.py     # Phase 2 — corpus-agnostic PDF ingestion service (ingest_pdf)
   facts.py      # Phase 3 — fact/evidence/relationship persistence + validation
   extract.py    # Phase 4 — candidate fact extraction (extract_document, extraction_summary)
-  llm.py        # Phase 4 — thin Anthropic client (AnthropicExtractor)
+  llm.py        # Phase 4/7 — Anthropic clients (AnthropicExtractor, AnthropicEntityConfirmer)
   verify.py     # Phase 5 — deterministic evidence verification (verify_document, verify_fact)
   normalize.py  # Phase 6 — deterministic numeric/date/unit/period normalization (normalize_document)
-  prompts/      # versioned extraction prompts (extraction_v1.md)
+  entities.py   # Phase 7 — entity resolution (resolve_document, resolution_summary)
+  prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md)
 scripts/        # smoke_extract.py — live extraction smoke test (needs ANTHROPIC_API_KEY)
-tests/          # config, db, health, ingestion, facts, extraction, verification, normalization (+ conftest, fakes)
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

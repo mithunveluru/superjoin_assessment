@@ -332,3 +332,48 @@ class DocNormalizationSummary(BaseModel):
     fy_convention: str = "unknown"
     fy_convention_source: str = "config_default"
     error: str | None = None
+
+
+# --- Phase 7: entity resolution --------------------------------------
+
+class EntityConfirmation(BaseModel):
+    """One ``llm.confirm_entities`` result for a borderline cluster. The LLM only
+    ever *confirms or splits* — deterministic code decides everything else."""
+
+    same: bool                               # True = every surface is one entity
+    confidence: float = 0.0
+    canonical_label: str | None = None
+    groups: list[list[str]] | None = None    # when same=False: the split
+    error_code: str | None = None
+    error_detail: str | None = None
+
+
+class EntityLink(BaseModel):
+    """Outcome of resolving one subject surface to an entity."""
+
+    surface: str
+    entity_id: int | None = None             # None = left unresolved (ambiguous)
+    canonical_label: str | None = None
+    match_method: str | None = None          # deterministic|similarity|llm|derived_fact|anaphora
+    score: float | None = None
+    created: bool = False                    # a new entity row was inserted
+
+
+class DocResolutionSummary(BaseModel):
+    """Outcome of ``app.entities.resolve_document`` — lightweight observability
+    (see also ``app.entities.resolution_summary``)."""
+
+    run_id: int
+    document_id: int
+    status: str
+    surfaces: int = 0
+    entities_created: int = 0
+    entities_linked: int = 0
+    aliases_added: int = 0
+    derived_aliases: int = 0
+    anaphora_resolved: int = 0
+    ambiguous: int = 0
+    promoted_eligible: int = 0
+    errors: int = 0
+    by_method: dict[str, int] = Field(default_factory=dict)
+    error: str | None = None
