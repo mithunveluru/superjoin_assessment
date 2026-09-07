@@ -1,0 +1,16 @@
+# Dependencies added per phase. Later phases append their own
+# (anthropic, fastembed, rapidfuzz, numpy; OCR libs only if a later phase needs them).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-dotenv>=1.0
+httpx>=0.27
+
+# Phase 2 — PDF ingestion
+pymupdf>=1.24
+
+# dev / test
+pytest>=8.0
+ruff>=0.6
+httpx2>=2.12          # starlette>=1.6 TestClient backend (silences the httpx deprecation notice)

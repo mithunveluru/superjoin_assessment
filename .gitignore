@@ -1,0 +1,43 @@
+# secrets & local data
+.env
+data/
+uploads/
+
+# generated / redundant artifacts
+starter-datasets.zip
+samples/*.tmp
+evaluation/reports/
+
+# provided material — kept locally for smoke testing, not part of the source repo
+# (the starter-datasets/**/README.md files stay tracked as dataset provenance)
+superjoin-vit-2026-assignment.pdf
+starter-datasets/*.pdf
+starter-datasets/**/*.pdf
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# sqlite runtime files
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+.DS_Store

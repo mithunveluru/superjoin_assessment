@@ -1,0 +1,17 @@
+[project]
+name = "fact-knowledge-layer"
+version = "0.1.0"
+description = "Extract grounded facts from PDFs and reason about how they relate."
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["llm: test performs a live LLM API call (skipped by default in CI)"]
