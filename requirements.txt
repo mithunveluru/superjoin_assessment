@@ -10,6 +10,9 @@ httpx>=0.27
 # Phase 2 — PDF ingestion
 pymupdf>=1.24
 
+# Phase 4 — LLM candidate extraction
+anthropic>=1.4
+
 # dev / test
 pytest>=8.0
 ruff>=0.6

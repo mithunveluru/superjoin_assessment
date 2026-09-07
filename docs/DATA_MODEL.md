@@ -4,6 +4,10 @@ SQLite (`data/knowledge.db`), WAL, `foreign_keys=ON`. Timestamps ISO‑8601 UTC
 text. JSON columns are `TEXT` holding a JSON value. `CHECK` constraints encode the
 controlled vocabularies so bad states fail at the storage layer.
 
+Phase 4 (candidate extraction) adds **no schema change** — it fills existing
+`facts` / `evidence` / `raw_extractions` / `runs` / `failures` columns; see
+*Phase 4 persistence semantics* below.
+
 This document is **authoritative for the current schema** — the Phase 1 genesis
 schema (`app/schema.sql`, `user_version 0`) plus migrations in
 `app/migrations/` (Phase 2 migration 1, Phase 3 migration 2); see the *Schema
@@ -208,6 +212,11 @@ Index: `runs(document_id)`, `runs(status)`, `runs(run_type)`.
 | created_at | TEXT NOT NULL | |
 
 Index: `raw_extractions(run_id)`, `raw_extractions(document_id, page_index)`.
+
+Phase 4 writes **one row per chunk regardless of outcome** (a `run_error` chunk
+still gets a row with `raw_response=''` and `parse_error` set). `temperature` is
+`NULL` — Sonnet 5 rejects sampling params. `request_settings` carries
+`{"stop_reason": …}`. `item_count` is `NULL` when the response did not parse.
 
 ## entities
 
@@ -430,7 +439,7 @@ Index: `failures(run_id)`, `failures(failure_type)`.
 | lifecycle_state | set by phase | evidence_status | reasoning_eligible | in `relationships`? |
 |---|---|---|---|---|
 | `RAW` | reserved (transition not yet used) | `UNVERIFIED` | 0 | no |
-| `CANDIDATE` | 4 (extraction) — default on insert | `UNVERIFIED` | 0 | no |
+| `CANDIDATE` | **4 (extraction)** — every extracted fact enters here | `UNVERIFIED` | 0 | no |
 | `GROUNDED` | 5 (verification) | `VERIFIED` / `PARTIAL` | 0 | no |
 | `NORMALIZED` | 6 (normalization) | `VERIFIED` / `PARTIAL` | 0 | no |
 | `ELIGIBLE_FOR_REASONING` | 6→7 (after normalize + entity link) | `VERIFIED` / `PARTIAL` | 1 | yes |
@@ -439,6 +448,25 @@ Index: `failures(run_id)`, `failures(failure_type)`.
 `PARTIAL` facts *may* be `reasoning_eligible` (invariant 2 only bars
 `UNVERIFIED`); the relationship layer records the reduced grounding in
 `deterministic_signals` and caps `confidence`.
+
+### Phase 4 persistence semantics — candidate facts
+
+`app.extract.extract_document` (LLM structured output → deterministic validation
+→ persist) writes each extracted claim as a fact with `lifecycle_state='CANDIDATE'`,
+`reasoning_eligible=0`, `evidence_status='UNVERIFIED'`, and `raw_payload` = the
+candidate exactly as the model produced it. It **does not** establish truth or
+evidence validity, and never promotes a fact past `CANDIDATE`. Alongside each
+fact it writes **one `evidence` row as a candidate citation** —
+`verification_method='unverified'`, `evidence_status='UNVERIFIED'`, `chunk_id` and
+`page_id` set, `char_start`/`char_end` translated from chunk-relative to
+page-relative (`chunks.char_offset + candidate offset`), `quote` as the model
+returned it. Phase 5 (verification) will compare that quote to `pages.text`,
+set the real `verification_method` / `numeric_rederivation`, and move passing
+facts to `GROUNDED`. A candidate that fails the structural contract
+(missing field, bad `fact_type`/`modality`/`period_type`, offsets outside the
+chunk, `start ≥ end`, numeric with no value, duplicate within the chunk) is not
+persisted — it becomes a `failures` row (`failure_type='extraction_unparsed'`)
+with the full candidate payload in `detail`; sibling candidates are unaffected.
 
 ## Numeric representation — worked examples
 

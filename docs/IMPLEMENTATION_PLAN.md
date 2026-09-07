@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 not started.
 
 | Phase | Title |
 |---|---|
@@ -18,7 +18,7 @@ so retrieval/threshold tuning is evidence‑driven.
 | 1 | Foundation + configuration + SQLite schema + tests — ✅ |
 | 2 | PDF ingestion + page‑preserving extraction — ✅ |
 | 3 | Fact / evidence model + persistence — ✅ |
-| 4 | Candidate fact extraction |
+| 4 | Candidate fact extraction — ✅ |
 | 5 | Evidence verification + quarantine |
 | 6 | Context + numeric / date / unit normalization |
 | 7 | Entity resolution |
@@ -34,7 +34,7 @@ so retrieval/threshold tuning is evidence‑driven.
 
 Python 3.11+, FastAPI + Uvicorn, SQLite (`sqlite3` stdlib), **PyMuPDF**
 (imported as `pymupdf`) for PDF, `fastembed` (local ONNX embeddings), `rapidfuzz`, `anthropic`
-SDK (`claude-sonnet-5`, `temperature=0`), `pytesseract`+`pdf2image` (OCR fallback
+SDK (`claude-sonnet-5`; no sampling params — Sonnet 5 rejects them), `pytesseract`+`pdf2image` (OCR fallback
 only), `numpy`, `pydantic` + `pydantic-settings`. Dev: `pytest`, `httpx`, `ruff`.
 Dependencies are added **in the phase that first imports them**, not up front.
 
@@ -58,7 +58,8 @@ app/
   retrieve.py      # Phase 8
   signals.py       # Phase 8  (deterministic comparison)
   reason.py        # Phase 9  (LLM proposes; signals.validate() decides)
-  llm.py           # Phase 4+ anthropic wrapper: extract_facts / confirm_entities / classify_relationship
+  llm.py           # Phase 4 — thin Anthropic wrapper (AnthropicExtractor)
+  prompts/         # versioned extraction prompts (extraction_v1.md)
   pipeline.py      # Phase 11 orchestration
 static/            # Phase 12
 evaluation/
@@ -229,26 +230,51 @@ relationship storage, all enforced. **Met.**
 
 ---
 
-## PHASE 4 — Candidate fact extraction
+## PHASE 4 — Candidate fact extraction  ✅ COMPLETE
 
-**Objective:** chunk → **candidate** facts via Claude (structured output),
-verbatim response stored in `raw_extractions`, transformed facts persisted at
-`lifecycle_state=CANDIDATE`. Extraction only — no grounding, no normalization.
-**Files:** `app/llm.py` (`extract_facts(chunk_text, doc_header) -> list[RawFact]`,
-`temperature=0`, bounded `max_tokens`/retries, usage → run stats), `app/extract.py`,
-`tests/test_extract.py`.
-**Tasks:** corpus‑agnostic prompt (`prompt_version` from config) that asks for
-subject/predicate/object **as written**, unit, currency, period text, scope
-words, qualifiers, **modality**, and the minimal verbatim quote + its offset in
-the provided text, plus `context_complete`. Store raw JSON first; parse with
-Pydantic; malformed items → `failures(extraction_unparsed)` + counted. Map quote
-offset chunk→page (minus `header_prefix_len`). Cost guard `max_llm_calls_per_doc`.
-**Acceptance:** the 27‑page deck yields ≥30 candidate facts, each with non‑empty
-subject/predicate/object, a quote, an offset within its page, a `modality` in the
-controlled set; ≥1 numeric + ≥1 semantic; a `raw_extractions` row per chunk;
-boilerplate page → ~0 facts. Offline path: a recorded chunk+response fixture
-exercises the parser with no network (`pytest -m llm` gates live calls).
-**Gate:** real candidate facts from a real PDF, verbatim LLM output retained.
+**Objective:** chunk → **candidate** facts via Claude structured output; the
+verbatim LLM response and every rejected candidate preserved; facts persisted at
+`lifecycle_state=CANDIDATE`, `reasoning_eligible=0`, `evidence_status=UNVERIFIED`.
+Extraction only — no evidence verification, normalization, entity resolution, or
+inference.
+**Files shipped:** `app/prompts/extraction_v1.md` (versioned, corpus-agnostic
+prompt); `app/llm.py` (`AnthropicExtractor` — lazy SDK import,
+`output_config.format` json_schema, no sampling params (Sonnet 5), SDK error
+chain → typed `LLMExtraction`); `app/extract.py` (`extract_document`, deterministic
+`_validate_candidate`, `_candidate_to_fact_in`, `extraction_summary`,
+`ExtractError`); `app/models.py` (`RawCandidate` / `RawExtraction` /
+`LLMExtraction` / `ExtractionRunResult`); `app/config.py` (llm effort / max_tokens
+/ timeout); `tests/fakes.py` (`FakeLLM`); `tests/test_extract.py` (32 tests);
+`scripts/smoke_extract.py`. `anthropic>=1.4` added.
+**How it works:** open an `extract` `runs` row → for each chunk (ordered by
+page_index, seq): call the client → **always** write a `raw_extractions` row (raw
+response + `stop_reason` + `parse_error`/`item_count`) → API / timeout / refusal /
+client-exception → record a `run_error` failure and continue → malformed or
+truncated JSON → `extraction_unparsed` and continue → else deterministically
+validate each candidate (non-empty subject/predicate/object/quote; `fact_type`,
+`modality`, `period_type` in the controlled sets; integer offsets with
+`0 ≤ start < end ≤ len(chunk.text)`; numeric facts carry a value; no duplicate
+`(subject,predicate,object,start,end)` within the chunk) → a failing candidate →
+`extraction_unparsed` failure with the **full candidate payload** in `detail`,
+siblings unaffected → a passing candidate → `insert_fact` (raw beside any parsed
+value; `raw_payload` = the candidate as produced; run/model/prompt metadata) then
+`attach_evidence` as a **candidate citation** (`verification_method='unverified'`,
+`evidence_status='UNVERIFIED'`, `chunk_id`/`page_id` set, offsets translated to
+page coordinates `chunk.char_offset + candidate offset`, quote as returned). Per-
+chunk DB writes are one transaction; the run row is finalised at the end; an
+unexpected error marks the run `failed`. Cost accumulates from `usage`;
+`max_llm_calls_per_doc` guard.
+**Acceptance (met):** all four fact types persist as `CANDIDATE` / non-eligible /
+`UNVERIFIED`; `raw_payload` + run + `raw_extractions` metadata round-trip; every
+persisted fact traces FACT→EVIDENCE→CHUNK→PAGE→DOCUMENT (`evidence_chain`);
+malformed JSON, truncation, API errors, client exceptions, and per-candidate
+validation failures are each recorded and isolated; `extraction_summary` reports
+chunks / generated / persisted / rejected / errors / by-type / by-document.
+Structural smoke on 2 real starter PDFs (259 chunks): 0 broken chains, 0
+mis-stated lifecycle. **Live-LLM extraction quality requires `ANTHROPIC_API_KEY`**
+(`scripts/smoke_extract.py`) — not run in this environment.
+**Gate:** candidate facts from real chunks with preserved provenance + raw
+output; nothing reasoning-eligible. **Met.**
 
 ---
 

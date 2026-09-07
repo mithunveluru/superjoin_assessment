@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # --- Phase 1: health ---------------------------------------------------------
 
@@ -188,3 +188,71 @@ class RelationshipIn(BaseModel):
     run_id: int | None = None
     model_name: str | None = None
     prompt_version: str | None = None
+
+
+# --- Phase 4: candidate fact extraction ----------------------------------
+
+# The LLM contract. Vocabulary fields are plain `str` on purpose: the LLM
+# *proposes* structure; deterministic code in app/extract.py validates it
+# (app/facts.FACT_TYPES etc.), so one bad candidate is rejected without failing
+# the whole response. extra="forbid" -> an unknown key is a structural violation.
+class RawCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str
+    predicate: str
+    object: str
+    fact_type: str
+    raw_value_text: str | None = None
+    parsed_value: float | None = None
+    unit: str | None = None
+    magnitude: str | None = None
+    currency: str | None = None
+    percentage: bool = False
+    ratio: float | None = None
+    reporting_period: str | None = None
+    period_type: str | None = None
+    scope: str | None = None
+    qualifiers: list[str] | None = None
+    modality: str | None = None
+    quote: str
+    char_start: int
+    char_end: int
+
+
+class RawExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    facts: list[RawCandidate] = Field(default_factory=list)
+
+
+class LLMExtraction(BaseModel):
+    """What ``app.llm`` returns for one chunk — always carries the raw text so
+    ``facts.raw_payload`` / ``raw_extractions.raw_response`` can preserve it."""
+
+    raw_text: str | None
+    parsed: RawExtraction | None
+    error_code: str | None = None          # api_error | auth | rate_limit | timeout |
+    error_detail: str | None = None        # malformed_response | truncated_response | refusal
+    model: str
+    prompt_version: str
+    stop_reason: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class ExtractionRunResult(BaseModel):
+    """Outcome of ``app.extract.extract_document`` — service return value +
+    lightweight observability (see also ``app.extract.extraction_summary``)."""
+
+    run_id: int
+    document_id: int
+    status: str                            # runs.status: 'done' | 'failed'
+    chunks_processed: int
+    candidates_generated: int
+    candidates_persisted: int
+    candidates_rejected: int
+    extraction_errors: int                 # chunk-level LLM/API failures
+    facts_by_type: dict[str, int] = Field(default_factory=dict)
+    estimated_cost_usd: float = 0.0
+    error: str | None = None

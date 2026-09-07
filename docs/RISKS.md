@@ -87,6 +87,40 @@ AGPL-licensed. That is acceptable for a hiring-assignment prototype. It would ne
 review before any closed-source commercial reuse (alternatives: `pypdfium2`,
 `pdfminer.six`). Noted as a future consideration; not changed.
 
+## LLM extraction quality is unverified in this environment
+
+Phase 4's structural pipeline (LLM call → deterministic validation → persistence
+→ provenance chain) is proven on real ingested chunks, but **extraction quality**
+— whether the model returns *meaningful atomic claims* rather than noise, and
+whether its `char_start`/`char_end` are actually correct — can only be checked
+with a live `ANTHROPIC_API_KEY` (`scripts/smoke_extract.py`), which was not
+available here. Risks a live run must be watched for: over-extraction (every
+number becomes a "fact"), quotes/offsets that don't line up with the chunk (these
+are *rejected* structurally if offsets fall outside the chunk, but a model can
+return a valid-range offset whose text doesn't match its quote — Phase 5's
+verification gate is the backstop), and table-linearized text (Phase 2 known
+limitation) yielding facts with the wrong subject/period. The prompt
+(`app/prompts/extraction_v1.md`) is written against these; it is versioned so it
+can be revised without touching code.
+
+## Structured-output wire contract may need adjustment on a live call
+
+`app/llm.py` requests `output_config.format` with a hand-written `json_schema`
+and no sampling params (Sonnet 5 rejects `temperature`/`top_p`/`top_k`). This is
+correct per the current API docs but has not been exercised against the live
+endpoint in this environment. If a live call rejects the schema shape, the fix is
+localized to `EXTRACTION_JSON_SCHEMA` / the `messages.create` call in `app/llm.py`
+— the extraction service, validation, and tests (which use a fake client) are
+unaffected.
+
+## Cost of a full extraction run
+
+One `extract` run makes one LLM call per chunk. The starter corpus is ~260–350
+chunks per large document; at Sonnet 5 rates that is roughly a dollar or two per
+document (`runs.estimated_cost_usd` accumulates the real figure from `usage`).
+`max_llm_calls_per_doc` caps a runaway document. Batch API / caching are future
+levers, not built.
+
 ## CHECK-constraint changes need a table rebuild (SQLite)
 
 SQLite cannot alter a `CHECK` constraint in place, so migration 2 (Phase 3)

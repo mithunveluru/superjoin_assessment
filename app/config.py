@@ -33,9 +33,13 @@ class Settings(BaseSettings):
     llm_provider: str = "anthropic"
     llm_model: str = "claude-sonnet-5"
     llm_api_key_env: str = "ANTHROPIC_API_KEY"
+    # Sonnet 5 rejects sampling params (temperature/top_p/top_k) — the extraction
+    # client does not send temperature. Kept for reproducibility docs / older models.
     llm_temperature: float = 0.0
-    llm_max_tokens: int = 4096
-    prompt_version: str = "v1"
+    llm_effort: str = "low"          # output_config.effort for structured extraction
+    llm_max_tokens: int = 8192       # per-chunk extraction output cap
+    llm_timeout_seconds: float = 120.0
+    prompt_version: str = "v1"       # extraction prompt version (app/prompts/extraction_<v>.md)
 
     # --- embeddings (used from Phase 7) --------------------------------------
     embedding_provider: str = "fastembed"

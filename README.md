@@ -29,18 +29,20 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–3 of 15 complete; Phase 4 not started.** This repo contains
+> **Status: Phases 1–4 of 15 complete; Phase 5 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer** (PDF → document → pages →
 > page-preserving text → deterministic chunks, with character-offset
-> traceability), and the **canonical fact + evidence + relationship persistence
-> model** (`app/facts.py`) — one fact model for numeric/semantic/temporal/
-> categorical facts, an explicit `RAW→…→ELIGIBLE_FOR_REASONING` lifecycle, and
-> the enforced invariant that a fact reaches the reasoning layer only with a
-> traceable FACT→EVIDENCE→(CHUNK→)PAGE→DOCUMENT chain. No LLM, fact-extraction,
-> normalization, entity-resolution, retrieval, or relationship-*inference* code
-> exists yet — those are later phases, see
+> traceability), the **canonical fact + evidence + relationship persistence
+> model** (`app/facts.py`), and **candidate fact extraction** (`app/extract.py` +
+> `app/llm.py`) — Claude structured output → deterministic validation → facts
+> persisted as `CANDIDATE` (never reasoning-eligible) with the verbatim LLM
+> payload, run metadata, and an unverified candidate citation
+> (FACT→EVIDENCE→CHUNK→PAGE→DOCUMENT). **Phase 4 extracts claims; it does not
+> establish evidence validity or reasoning eligibility.** No evidence
+> verification, normalization, entity resolution, retrieval, or relationship
+> inference exists yet — those are later phases, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
 > positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
@@ -71,7 +73,9 @@ pip install -r requirements.txt
 cp .env.example .env                  # optional; every setting has a default
 ```
 
-An `ANTHROPIC_API_KEY` is **not** needed for Phases 1–2 (nothing calls the LLM yet).
+An `ANTHROPIC_API_KEY` is **not** needed for Phases 1–3 or for the test suite
+(candidate extraction is exercised with a fake LLM client). It **is** needed for
+a live candidate-extraction run — `scripts/smoke_extract.py <pdf>`.
 
 ## Run
 
@@ -121,10 +125,19 @@ pytest
   fact cannot become eligible — helper *and* DB CHECK), and relationship storage
   (five categories, canonical pair order, self-relationship rejected, duplicates
   a deterministic no-op).
+- **Phase 4** covers: the structured-output extraction contract, deterministic
+  candidate validation (fields, controlled vocabularies, chunk-relative offsets,
+  numeric value present, in-chunk de-duplication), persistence as non-eligible
+  `CANDIDATE` facts with the verbatim `raw_payload` and run metadata, the
+  unverified candidate-citation `evidence` row (page-relative offsets, full
+  FACT→EVIDENCE→CHUNK→PAGE→DOCUMENT trace), failure isolation (malformed JSON,
+  truncation, API errors, client exceptions, per-candidate rejections — each
+  recorded, siblings unaffected), and the `extraction_summary` observability.
+  Uses a deterministic fake LLM — no API calls.
 
-Unit tests use small synthetic PDFs / synthetic source rows; the provided starter
-PDFs are used only for manual smoke tests and are kept locally (git-ignored), not
-committed.
+Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
+client; the provided starter PDFs and any live Anthropic call are for manual
+smoke tests only. PDFs are kept locally (git-ignored), not committed.
 
 ## Configuration
 
@@ -154,7 +167,11 @@ app/
   models.py     # pydantic models (grows per phase)
   ingest.py     # Phase 2 — corpus-agnostic PDF ingestion service (ingest_pdf)
   facts.py      # Phase 3 — fact/evidence/relationship persistence + validation
-tests/          # config, db/schema, health, ingestion, facts (+ conftest factories)
+  extract.py    # Phase 4 — candidate fact extraction (extract_document, extraction_summary)
+  llm.py        # Phase 4 — thin Anthropic client (AnthropicExtractor)
+  prompts/      # versioned extraction prompts (extraction_v1.md)
+scripts/        # smoke_extract.py — live extraction smoke test (needs ANTHROPIC_API_KEY)
+tests/          # config, db, health, ingestion, facts, extraction (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```
