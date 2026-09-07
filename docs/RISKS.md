@@ -121,6 +121,35 @@ document (`runs.estimated_cost_usd` accumulates the real figure from `usage`).
 `max_llm_calls_per_doc` caps a runaway document. Batch API / caching are future
 levers, not built.
 
+## Verification recovers evidence spans, never claims
+
+Phase 5's `recovered_exact` rung updates `evidence.char_start`/`char_end` when the
+LLM's offsets were wrong but the exact quote occurs **once** in the chunk. It only
+ever moves the *pointer*; the quote, `raw_payload`, and every fact field are
+untouched. A quote occurring more than once → `ambiguous_quote_match` → quarantine
+(never a guess). If a future change makes recovery less conservative (normalized
+recovery, cross-chunk search) it must preserve this: correcting a claim's *value*
+to match the source would destroy evaluation integrity.
+
+## Fuzzy verification threshold is a starting value
+
+`FKL_VERIFY_FUZZY_THRESHOLD` (90) and the numeric/unit token guard were chosen
+conservatively and validated on synthetic + real persisted text, not tuned
+against a labelled set. Fuzzy only ever yields `PARTIAL` (never `VERIFIED`) and
+only after every number / currency / unit token in the quote is found verbatim in
+the source, so a too-low threshold cannot let a changed value through — it can
+only let through a formatting-different quote that should perhaps have failed. The
+Phase 10 evaluation harness is where this threshold gets evidence.
+
+## PARTIAL (fuzzy) facts can still become reasoning-eligible
+
+Per the Phase-0 design, `mark_reasoning_eligible` accepts `PARTIAL` evidence
+(invariant 2 only bars `UNVERIFIED`). Phase 5 does **not** change that rule — the
+smallest safe change was to make the weakness *legible*: a Phase-5 `PARTIAL` is
+always `verification_method='fuzzy'` with a recorded `fuzzy_score`, never `exact`.
+The relationship engine (Phase 9) is responsible for capping confidence on
+`fuzzy`/`PARTIAL` evidence; that is not yet implemented.
+
 ## CHECK-constraint changes need a table rebuild (SQLite)
 
 SQLite cannot alter a `CHECK` constraint in place, so migration 2 (Phase 3)

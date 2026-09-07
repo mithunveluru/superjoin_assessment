@@ -27,6 +27,7 @@ MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 _MIGRATION_FILES: list[tuple[int, str]] = [
     (1, "0001_phase2_ingestion.sql"),
     (2, "0002_phase3_fact_evidence_model.sql"),
+    (3, "0003_phase5_verification.sql"),
 ]
 _MIGRATIONS: list[tuple[int, str]] = [
     (version, (MIGRATIONS_DIR / name).read_text(encoding="utf-8"))

@@ -29,20 +29,22 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–4 of 15 complete; Phase 5 not started.** This repo contains
+> **Status: Phases 1–5 of 15 complete; Phase 6 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
-> **corpus-agnostic PDF ingestion layer** (PDF → document → pages →
-> page-preserving text → deterministic chunks, with character-offset
-> traceability), the **canonical fact + evidence + relationship persistence
-> model** (`app/facts.py`), and **candidate fact extraction** (`app/extract.py` +
-> `app/llm.py`) — Claude structured output → deterministic validation → facts
-> persisted as `CANDIDATE` (never reasoning-eligible) with the verbatim LLM
-> payload, run metadata, and an unverified candidate citation
-> (FACT→EVIDENCE→CHUNK→PAGE→DOCUMENT). **Phase 4 extracts claims; it does not
-> establish evidence validity or reasoning eligibility.** No evidence
-> verification, normalization, entity resolution, retrieval, or relationship
-> inference exists yet — those are later phases, see
+> **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
+> relationship persistence model** (`app/facts.py`), **candidate fact
+> extraction** (`app/extract.py` + `app/llm.py` — Claude structured output →
+> deterministic validation → facts persisted as `CANDIDATE`), and **deterministic
+> evidence verification** (`app/verify.py` — no LLM): each candidate fact's
+> evidence is checked against the persisted source text via an
+> `exact → normalized_exact → recovered_exact → fuzzy` ladder; a match grounds the
+> fact (`GROUNDED`), a genuine mismatch (absent quote, ambiguous match, wrong
+> number/currency/unit) **quarantines** it (preserved, never reasoning-eligible).
+> Claims are never rewritten — only an evidence *span* is corrected, and only when
+> the exact quote occurs once. **Phase 5 verifies evidence; it does not perform
+> semantic reasoning.** No normalization, entity resolution, retrieval, or
+> relationship inference exists yet — those are later phases, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
 > positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
@@ -134,6 +136,19 @@ pytest
   truncation, API errors, client exceptions, per-candidate rejections — each
   recorded, siblings unaffected), and the `extraction_summary` observability.
   Uses a deterministic fake LLM — no API calls.
+- **Phase 5** covers: migration 3 (climbs from any prior state, idempotent,
+  FK-checked); the verification ladder — `exact` at offset, `normalized_exact`
+  (whitespace/punctuation folding only, no value changes), `recovered_exact`
+  (unique in-chunk quote → span corrected, `>1` → `ambiguous_quote_match`),
+  conservative `fuzzy` (numeric/unit token guard + threshold → `PARTIAL`),
+  else quarantine; bounded numeric consistency (`raw_value_text` present,
+  `parsed_value` == its digits, percentage coherence, currency/magnitude/unit
+  present) → `numeric_mismatch` quarantine that **never rewrites the claim**;
+  `CANDIDATE → GROUNDED` on success, `→ QUARANTINED` on failure with the
+  `raw_payload` preserved; a GROUNDED VERIFIED fact can then become
+  reasoning-eligible while a quarantined one cannot (helper + DB CHECK);
+  provenance chain preserved; idempotent re-runs; `verification_summary`
+  observability; a real starter-PDF deterministic check. **No LLM, no API key.**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -169,9 +184,10 @@ app/
   facts.py      # Phase 3 — fact/evidence/relationship persistence + validation
   extract.py    # Phase 4 — candidate fact extraction (extract_document, extraction_summary)
   llm.py        # Phase 4 — thin Anthropic client (AnthropicExtractor)
+  verify.py     # Phase 5 — deterministic evidence verification (verify_document, verify_fact)
   prompts/      # versioned extraction prompts (extraction_v1.md)
 scripts/        # smoke_extract.py — live extraction smoke test (needs ANTHROPIC_API_KEY)
-tests/          # config, db, health, ingestion, facts, extraction (+ conftest, fakes)
+tests/          # config, db, health, ingestion, facts, extraction, verification (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

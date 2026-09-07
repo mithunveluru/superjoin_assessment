@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     chunk_overlap_chars: int = 150
     chunk_boundary_backoff_chars: int = 200
 
+    # evidence verification (Phase 5). Fuzzy matching is a *last resort* for PDF
+    # formatting artifacts only — a numeric/unit token guard runs first, so
+    # changed numbers/currencies/units can never pass fuzzy.
+    verify_fuzzy_threshold: float = 90.0        # rapidfuzz partial_ratio, 0–100
+    verify_fuzzy_min_quote_chars: int = 12      # shorter quotes never fuzzy-match
+    verify_numeric_tolerance: float = 1e-6
+
     # --- app ------------------------------------------------------------------
     app_host: str = "127.0.0.1"
     app_port: int = 8000

@@ -256,3 +256,41 @@ class ExtractionRunResult(BaseModel):
     facts_by_type: dict[str, int] = Field(default_factory=dict)
     estimated_cost_usd: float = 0.0
     error: str | None = None
+
+
+# --- Phase 5: evidence verification -------------------------------------
+
+class VerificationResult(BaseModel):
+    """Outcome of verifying one candidate fact's evidence against persisted
+    Phase-2 source text. Deterministic; no LLM."""
+
+    fact_id: int
+    evidence_id: int | None = None
+    evidence_status: EvidenceStatus                         # VERIFIED | PARTIAL | UNVERIFIED
+    verification_method: str                                # exact | normalized_exact |
+    numeric_rederivation: NumericRederivation               #   recovered_exact | fuzzy | unverified
+    lifecycle_state: str                                    # facts.lifecycle_state after this step
+    recovered: bool = False                                 # offsets were corrected
+    fuzzy_score: float | None = None
+    reason: str                                             # deterministic outcome code
+    detail: str | None = None
+
+
+class DocVerificationSummary(BaseModel):
+    """Outcome of ``app.verify.verify_document`` — lightweight observability
+    (see also ``app.verify.verification_summary``)."""
+
+    run_id: int
+    document_id: int
+    status: str
+    examined: int = 0
+    verified: int = 0
+    partial: int = 0
+    unverified: int = 0
+    quarantined: int = 0
+    recovered: int = 0
+    numeric_mismatches: int = 0
+    ambiguous_matches: int = 0
+    errors: int = 0
+    by_method: dict[str, int] = Field(default_factory=dict)
+    error: str | None = None

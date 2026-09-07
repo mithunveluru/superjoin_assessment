@@ -65,7 +65,7 @@ def _grounded_eligible_fact(conn, src, page=0, **over) -> int:
 # schema / migration                                                         #
 # --------------------------------------------------------------------------- #
 def test_migration_2_applied(conn):
-    assert db.schema_version(conn) == 2
+    assert db.schema_version(conn) == db.CURRENT_SCHEMA_VERSION
     fcols = {r["name"] for r in conn.execute("PRAGMA table_info(facts)")}
     assert "raw_payload" in fcols
     ecols = {r["name"] for r in conn.execute("PRAGMA table_info(evidence)")}
@@ -78,7 +78,7 @@ def test_migration_idempotent(db_path):
     db.init_db()
     c = db.connect()
     try:
-        assert db.schema_version(c) == 2
+        assert db.schema_version(c) == db.CURRENT_SCHEMA_VERSION
     finally:
         c.close()
 
@@ -93,7 +93,7 @@ def test_migration_from_genesis_only_state(db_path):
     db.init_db()  # must climb to 2
     c = db.connect()
     try:
-        assert db.schema_version(c) == 2
+        assert db.schema_version(c) == db.CURRENT_SCHEMA_VERSION
         assert "raw_payload" in {r["name"] for r in c.execute("PRAGMA table_info(facts)")}
         assert "page_id" in {r["name"] for r in c.execute("PRAGMA table_info(evidence)")}
     finally:
@@ -111,7 +111,7 @@ def test_migration_from_phase2_state(db_path):
     db.init_db()
     c = db.connect()
     try:
-        assert db.schema_version(c) == 2
+        assert db.schema_version(c) == db.CURRENT_SCHEMA_VERSION
     finally:
         c.close()
 

@@ -13,6 +13,9 @@ pymupdf>=1.24
 # Phase 4 — LLM candidate extraction
 anthropic>=1.4
 
+# Phase 5 — evidence verification (conservative fuzzy matching only)
+rapidfuzz>=3.6
+
 # dev / test
 pytest>=8.0
 ruff>=0.6

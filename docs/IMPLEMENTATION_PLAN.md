@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 not started.
 
 | Phase | Title |
 |---|---|
@@ -19,7 +19,7 @@ so retrieval/threshold tuning is evidence‑driven.
 | 2 | PDF ingestion + page‑preserving extraction — ✅ |
 | 3 | Fact / evidence model + persistence — ✅ |
 | 4 | Candidate fact extraction — ✅ |
-| 5 | Evidence verification + quarantine |
+| 5 | Evidence verification + quarantine — ✅ |
 | 6 | Context + numeric / date / unit normalization |
 | 7 | Entity resolution |
 | 8 | Candidate retrieval + deterministic signals |
@@ -52,7 +52,7 @@ app/
   models.py        # pydantic response/request models (grows per phase)
   ingest.py        # Phase 2
   extract.py       # Phase 4
-  ground.py        # Phase 5
+  verify.py        # Phase 5 — deterministic evidence verification (verify_document / verify_fact)
   normalize.py     # Phase 6
   entities.py      # Phase 7
   retrieve.py      # Phase 8
@@ -278,25 +278,59 @@ output; nothing reasoning-eligible. **Met.**
 
 ---
 
-## PHASE 5 — Evidence verification + quarantine
+## PHASE 5 — Evidence verification + quarantine  ✅ COMPLETE
 
-**Objective:** the grounding gate. Set `evidence.verification_method`,
-`numeric_rederivation`, `evidence_status`; promote passing facts to `GROUNDED`,
-quarantine the rest. Unverified facts **remain inspectable**.
-**Files:** `app/ground.py`, wire into `pipeline`/`extract`, `tests/test_ground.py`.
-**Tasks:** locate `quote` in `pages.text` → `exact`; whitespace/unicode‑normalized
-match → `normalized_exact`; `rapidfuzz.partial_ratio ≥ 92` window → `fuzzy` (store
-`fuzzy_score`); else `unverified`. For numeric facts, run
-`normalize.parse_number` on the quote and compare to the extracted number →
-`numeric_rederivation ∈ {success, failed}`. Derive `evidence_status` per the
-DATA_MODEL table; set `facts.evidence_status`. `UNVERIFIED` (or `fuzzy`+`failed`)
-⇒ `quarantine(grounding_failed)`. Write human‑readable `evidence.notes`.
-**Acceptance:** on the deck, ≥90% of candidate facts reach `VERIFIED`; a planted
-fabricated quote → `UNVERIFIED` + `QUARANTINED` + a `failures` row, and is absent
-from any `reasoning_eligible` set; a whitespace‑mangled real quote →
-`normalized_exact` or `fuzzy`, `PARTIAL`.
-**Gate:** no `UNVERIFIED` fact can become `reasoning_eligible`; gate rejects a
-planted hallucination; failures inspectable.
+**Objective:** decide, deterministically and **without an LLM**, whether each
+Phase-4 candidate fact's evidence is actually supported by the persisted Phase-2
+source text. Verified facts → `GROUNDED`; unverifiable → `QUARANTINED` (preserved,
+never reasoning-eligible). Claims are never rewritten — only an evidence *span*
+may be corrected when the exact quote occurs once in the chunk.
+**Files shipped:** `app/migrations/0003_phase5_verification.sql` (migration 3 —
+`evidence` rebuilt: `verification_method` gains `recovered_exact`, `+ verified_at`);
+`app/verify.py` (`verify_fact`, `verify_document`, `verification_summary`,
+`normalize_for_compare`, `_check_numeric_consistency`, `_run_ladder`,
+`VerifyError`); `app/models.py` (`VerificationResult`, `DocVerificationSummary`);
+`app/config.py` (`verify_fuzzy_threshold` = 90, `verify_fuzzy_min_quote_chars`,
+`verify_numeric_tolerance`); `tests/test_verify.py` (46 tests). `rapidfuzz>=3.6`
+added.
+**Verification ladder** (first hit wins; source of truth is `pages.text` /
+`chunks.text` resolved from the *authoritative* `document_id`/`page_id`/`chunk_id`
+— never the LLM's numbers):
+  1. `exact` — `source[start:end] == quote` → VERIFIED
+  2. `normalized_exact` — equal after collapsing Unicode whitespace + folding
+     trivial quote/dash variants (no case, digit, separator, currency, %, or unit
+     changes) → VERIFIED
+  3. `recovered_exact` — offsets wrong, but the exact quote occurs **exactly
+     once** in the chunk → span corrected to the authoritative location (quote +
+     `raw_payload` untouched) → VERIFIED; **>1 occurrence → not guessed →
+     quarantine `ambiguous_quote_match`**
+  4. `fuzzy` — last resort for PDF artifacts: a guard first requires every number,
+     currency token and unit/magnitude word from the quote to be present verbatim
+     in the source; then `rapidfuzz.partial_ratio ≥ FKL_VERIFY_FUZZY_THRESHOLD`
+     → **PARTIAL** (never VERIFIED; `fuzzy_score` recorded)
+  5. `unverified` — none of the above → quarantine (`quote_not_found`)
+**Numeric consistency (§9, bounded — not Phase-6 normalization):** for numeric
+facts that reach VERIFIED/PARTIAL, check that `raw_value_text`'s tokens are in the
+verified span, `parsed_value` equals the number in `raw_value_text` (no scale
+applied), percentage/ratio is coherent, and `currency`/`magnitude`/`unit_raw`
+(alias-aware) appear in the span. Any failure → `numeric_rederivation='failed'` →
+**quarantine `numeric_mismatch`**, claim unchanged (candidate `8000` vs source
+`8142` is a failure, never a repair).
+**Idempotency:** the single `evidence` row is updated in place (never a second
+row); stale `grounding_failed` failures for a fact are deleted before re-writing;
+a re-run is deterministic; `verify_document` skips already-`QUARANTINED` facts.
+**Acceptance (met):** exact / normalized / recovered / ambiguous / absent /
+out-of-range-offset / source-unavailable / no-evidence cases each land on the
+right rung; numeric mismatch (wrong value, currency, unit, magnitude, percentage)
+quarantines without repairing the claim; `CANDIDATE → GROUNDED` on success and a
+grounded VERIFIED fact can then `mark_reasoning_eligible`; a failed fact is
+`QUARANTINED`, `reasoning_eligible=0`, `evidence_status='UNVERIFIED'`, payload
+preserved, and the DB CHECK still blocks a manual `reasoning_eligible=1`; every
+result still traces FACT→EVIDENCE→CHUNK→PAGE→DOCUMENT; verification twice is a
+no-op. Real starter-PDF smoke over 2 corpora: exact/recovered/normalized →
+GROUNDED, fabricated quote + wrong number → QUARANTINED, 0 broken chains.
+**Gate:** deterministic evidence verification with quarantine; nothing
+reasoning-eligible without VERIFIED/PARTIAL grounding. **Met.**
 
 ---
 

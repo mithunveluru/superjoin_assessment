@@ -4,13 +4,14 @@ SQLite (`data/knowledge.db`), WAL, `foreign_keys=ON`. Timestamps ISO‑8601 UTC
 text. JSON columns are `TEXT` holding a JSON value. `CHECK` constraints encode the
 controlled vocabularies so bad states fail at the storage layer.
 
-Phase 4 (candidate extraction) adds **no schema change** — it fills existing
-`facts` / `evidence` / `raw_extractions` / `runs` / `failures` columns; see
-*Phase 4 persistence semantics* below.
+Phase 4 (candidate extraction) adds **no schema change**. Phase 5 (evidence
+verification) adds **migration 3** (`evidence.verification_method` gains
+`recovered_exact`, `+ evidence.verified_at`). See *Phase 4 persistence semantics*
+and *Phase 5 verification semantics* below.
 
 This document is **authoritative for the current schema** — the Phase 1 genesis
 schema (`app/schema.sql`, `user_version 0`) plus migrations in
-`app/migrations/` (Phase 2 migration 1, Phase 3 migration 2); see the *Schema
+`app/migrations/` (Phase 2 migration 1, Phase 3 migration 2, Phase 5 migration 3); see the *Schema
 migrations* section at the end. Column names may be adjusted in implementation
 but the shape, constraints, and invariants are fixed. The write/validate layer is
 `app/facts.py` (`insert_fact`, `attach_evidence`, `mark_reasoning_eligible`,
@@ -27,10 +28,11 @@ input DTOs `FactIn` / `EvidenceIn` / `RelationshipIn` in `app/models.py`.
   `QUARANTINED` as a terminal side state. Failed facts are **kept and
   inspectable**, never deleted.
 - **Verification is described, not scored.** `evidence.verification_method`
-  (`exact | normalized_exact | fuzzy | unavailable | unverified`) + `evidence_status`
-  (`VERIFIED | PARTIAL | UNVERIFIED`) + `numeric_rederivation`
-  (`not_applicable | success | failed`) are the primary record. `evidence_score`
-  is optional and only set when derived from explicit measurable signals.
+  (`exact | normalized_exact | recovered_exact | fuzzy | unavailable | unverified`)
+  + `evidence_status` (`VERIFIED | PARTIAL | UNVERIFIED`) + `numeric_rederivation`
+  (`not_applicable | success | failed`) + `fuzzy_score` + `notes` are the primary
+  record. `evidence_score` is optional and only set from explicit measurable
+  signals. Phase 5 sets these deterministically (no LLM).
 - **Numeric facts keep every representation** (raw string, parsed number,
   magnitude word + factor, base value, currency, percentage ratio, raw + norm
   unit). The original text is always recoverable.
@@ -157,6 +159,10 @@ no-op.
 - **Migration 1** (Phase 2, `0001_phase2_ingestion.sql`) — `ADD COLUMN` only:
   `documents.file_size/mime_type`, `pages.extraction_status/error/meta`,
   `chunks.char_end`. Nullable-or-defaulted, no rewrite, no data loss.
+- **Migration 3** (Phase 5, `0003_phase5_verification.sql`) — a CHECK change,
+  so `evidence` is rebuilt (same table-redefinition procedure): widens
+  `verification_method` (+`recovered_exact`), adds `verified_at`, recreates the
+  `evidence` indexes (+`ix_evidence_status`).
 - **Migration 2** (Phase 3, `0002_phase3_fact_evidence_model.sql`) — a CHECK
   change, so `facts` and `evidence` are rebuilt with the SQLite
   table-redefinition procedure (create new / `INSERT … SELECT` / drop / rename)
@@ -345,12 +351,13 @@ offsets ∈ `[0, len(pages.text)]`).
 | char_end | INTEGER | |
 | quote | TEXT NOT NULL | verbatim; equals `page.text[char_start:char_end]` when `verification_method ∈ (exact, normalized_exact)` |
 | method | TEXT DEFAULT `text_layer` | CHECK ∈ (`text_layer`,`ocr`) |
-| **verification_method** | TEXT NOT NULL DEFAULT `unverified` | CHECK ∈ (`exact`,`normalized_exact`,`fuzzy`,`unavailable`,`unverified`) *(migration 2 adds `unavailable` = could not attempt, vs `unverified` = attempted, not found)* |
+| **verification_method** | TEXT NOT NULL DEFAULT `unverified` | CHECK ∈ (`exact`,`normalized_exact`,`recovered_exact`,`fuzzy`,`unavailable`,`unverified`) *(m2 adds `unavailable`; m3 adds `recovered_exact` = offsets were wrong, exact quote found once in the chunk → span corrected)* |
 | fuzzy_score | REAL | set only when `verification_method='fuzzy'` |
 | **numeric_rederivation** | TEXT NOT NULL DEFAULT `not_applicable` | CHECK ∈ (`not_applicable`,`success`,`failed`) |
 | **evidence_status** | TEXT NOT NULL DEFAULT `UNVERIFIED` | CHECK ∈ (`VERIFIED`,`PARTIAL`,`UNVERIFIED`) |
 | evidence_score | REAL | OPTIONAL — only if computed from explicit signals; may be NULL |
 | notes | TEXT | human‑readable "why verified/partial/failed" for the UI |
+| verified_at | TEXT | when the Phase-5 verifier last ran against this row *(migration 3)* |
 | created_at | TEXT NOT NULL | |
 
 Table CHECK: `char_start IS NULL OR char_end IS NULL OR char_start < char_end`
@@ -361,10 +368,11 @@ Status derivation (implemented Phase 5, documented here):
 | verification_method | numeric_rederivation | ⇒ evidence_status |
 |---|---|---|
 | `exact` / `normalized_exact` | `not_applicable` / `success` | **VERIFIED** |
-| `exact` / `normalized_exact` | `failed` | **PARTIAL** (quote real, number not re‑derivable) |
+| `exact` / `normalized_exact` / `recovered_exact` | `failed` | **UNVERIFIED** → fact **quarantined** `numeric_mismatch` (Phase 5: a genuine value/currency/unit discrepancy is a failure, not a repair) |
 | `fuzzy` | `not_applicable` / `success` | **PARTIAL** |
 | `fuzzy` | `failed` | **UNVERIFIED** |
-| `unavailable` / `unverified` | any | **UNVERIFIED** |
+| `fuzzy` | `failed` | **UNVERIFIED** → quarantined `numeric_mismatch` |
+| `unavailable` / `unverified` | any | **UNVERIFIED** → quarantined |
 
 Index: `evidence(document_id, page_index)`, `evidence(page_id)`,
 `evidence(chunk_id)`.
@@ -440,14 +448,44 @@ Index: `failures(run_id)`, `failures(failure_type)`.
 |---|---|---|---|---|
 | `RAW` | reserved (transition not yet used) | `UNVERIFIED` | 0 | no |
 | `CANDIDATE` | **4 (extraction)** — every extracted fact enters here | `UNVERIFIED` | 0 | no |
-| `GROUNDED` | 5 (verification) | `VERIFIED` / `PARTIAL` | 0 | no |
+| `GROUNDED` | **5 (verification)** — `verify_document`/`verify_fact` on a VERIFIED/PARTIAL result | `VERIFIED` / `PARTIAL` | 0 | no |
 | `NORMALIZED` | 6 (normalization) | `VERIFIED` / `PARTIAL` | 0 | no |
 | `ELIGIBLE_FOR_REASONING` | 6→7 (after normalize + entity link) | `VERIFIED` / `PARTIAL` | 1 | yes |
 | `QUARANTINED` | any | any | 0 (CHECK) | no — appears in `failures` + `/failures` UI |
 
 `PARTIAL` facts *may* be `reasoning_eligible` (invariant 2 only bars
 `UNVERIFIED`); the relationship layer records the reduced grounding in
-`deterministic_signals` and caps `confidence`.
+`deterministic_signals` and caps `confidence`. A `PARTIAL` produced by Phase 5 is
+always a `fuzzy` match and is stored as `verification_method='fuzzy'` (never
+`exact`), so it is legibly weaker to every downstream reader — it never
+masquerades as exact evidence.
+
+### Phase 5 verification semantics
+
+`app.verify.verify_document` / `verify_fact` decide, **deterministically and
+without an LLM**, whether a candidate fact's evidence is supported by the
+persisted source text (`pages.text` / `chunks.text`), resolved from the
+*authoritative* `document_id` / `page_id` / `chunk_id` — the LLM's page numbers
+are never trusted. The **ladder** (first hit wins):
+
+| method | condition | result |
+|---|---|---|
+| `exact` | `source[start:end] == quote` | VERIFIED, GROUNDED |
+| `normalized_exact` | equal after collapsing Unicode whitespace + folding trivial quote/dash variants (no case/digit/separator/currency/%/unit change) | VERIFIED, GROUNDED |
+| `recovered_exact` | offsets wrong, exact quote occurs **once** in the chunk → span corrected (quote + `raw_payload` untouched) | VERIFIED, GROUNDED |
+| — | exact quote occurs **>1** time in the chunk | UNVERIFIED, quarantined `ambiguous_quote_match` |
+| `fuzzy` | numeric/currency/unit token guard passes **and** `rapidfuzz.partial_ratio ≥ FKL_VERIFY_FUZZY_THRESHOLD` | **PARTIAL**, GROUNDED, `fuzzy_score` recorded |
+| `unverified` | none of the above | UNVERIFIED, quarantined `quote_not_found` / `numeric_token_mismatch` / `source_unavailable` / `unsupported_evidence` |
+
+For numeric facts that reach VERIFIED/PARTIAL, a **bounded** numeric-consistency
+check runs (NOT Phase-6 normalization): `raw_value_text` tokens present in the
+verified span, `parsed_value` == the number in `raw_value_text` (no scale
+applied), percentage/ratio coherent, `currency`/`magnitude`/`unit_raw` (alias-
+aware) present. Any failure → `numeric_rederivation='failed'` → UNVERIFIED,
+quarantined `numeric_mismatch`; **the claim is never rewritten** (candidate `8000`
+vs source `8142` is a failure, not a correction). Verification is idempotent — the
+single `evidence` row is updated in place, stale `grounding_failed` failures are
+replaced, a re-run is deterministic.
 
 ### Phase 4 persistence semantics — candidate facts
 
