@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–8 of 15 complete; Phase 9 not started.** This repo contains
+> **Status: Phases 1–9 of 15 complete; Phase 10 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -73,9 +73,26 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > for downstream reasoning — it does not classify relationships**, does not touch
 > a fact's lifecycle, and writes nothing. Context differences are signals, never
 > retrieval exclusions. Embedding retrieval is deferred (no local model in this
-> environment) and documented as the next enhancement. **Relationship
-> classification** (`CORROBORATES` / `CONTRADICTS` / …) does not exist yet — that
-> is Phase 9, see
+> environment) and documented as the next enhancement. **Relationship reasoning**
+> (`app/reason.py`) then classifies each candidate pair as `CORROBORATES`,
+> `CONTRADICTS`, `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`:
+> `deterministic_verdict` runs a config-thresholded rule ladder over the
+> `SignalSet` and settles every case it can (equal-within-tolerance numbers under
+> identical context → `CORROBORATES`; delta past the contradiction threshold →
+> `CONTRADICTS`; a `scope_conflict` / currency / unit / period-type / modality
+> difference → `DIFFERENT_CONTEXT` with the dimension named; distinct reporting
+> periods with a changed value → `TEMPORAL_EVOLUTION`; anything unclear →
+> `UNCERTAIN`). Only a genuinely semantic residue (predicate synonymy, statement
+> polarity) goes to an **optional** `AnthropicRelationshipConfirmer`, whose
+> proposal is re-checked by `_validate_llm` and can be overridden or downgraded —
+> the LLM never has the last word, and with no API key every deterministic
+> category is still produced (the residue becomes `UNCERTAIN`). Each relationship
+> is persisted through the existing `add_relationship` (canonical `(min,max)`,
+> idempotent) with its full `reasoning`, the deterministic signals, `confidence`,
+> `llm_used`, `llm_proposed_category`, and `validation_action`; every `UNCERTAIN`
+> pair also writes a `relationship_uncertain` failure. Phase 9 does not retrieve,
+> re-resolve, re-verify, or re-normalize, and never changes a fact's lifecycle or
+> evidence. The **evaluation harness** (Phase 10) is next, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
 > positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
@@ -222,6 +239,27 @@ pytest
   and writes no relationship, a C1-shape pair retrieved **without** a category,
   `retrieval_summary`, a corpus-string grep, a real starter-PDF cross-document
   smoke. **No LLM, no API key, no new dependency, schema unchanged.**
+- **Phase 9** covers: `deterministic_verdict` producing all five categories with
+  no LLM (numeric equivalence → `CORROBORATES`, delta past the contradiction
+  threshold → `CONTRADICTS`, scope/currency/unit/period-type/modality difference
+  → `DIFFERENT_CONTEXT` with the right `context_dimension`, distinct periods +
+  changed value/statement → `TEMPORAL_EVOLUTION`, and the "director active vs
+  resigned July 2024" semantic shape → `TEMPORAL_EVOLUTION` from dates+modality,
+  not `CONTRADICTS`); numeric edge cases (exact / within tol / between the two
+  thresholds / sign flip / `%`-vs-absolute / missing base value); thresholds come
+  from `Settings` (loosening the tolerance flips a pair to `CORROBORATES`);
+  `_validate_llm` overriding an LLM `CONTRADICTS` on equal numbers →
+  `CORROBORATES`, on a scope conflict → `DIFFERENT_CONTEXT`, on distinct periods
+  → `TEMPORAL_EVOLUTION`, and downgrading mixed-modality / missing-period
+  proposals; a fake confirmer for the semantic step (accepted / downgraded /
+  invalid-category / raising an exception without crashing); a deterministic case
+  never calling the LLM; `reason_document` persistence (canonical order, no
+  duplicates, byte-identical wipe-and-re-run, `relationship_uncertain` failure
+  rows, `reasoning_summary`); safety (quarantined / unverified / non-eligible
+  facts never in a relationship, `reason_pair` guard, no lifecycle or evidence
+  mutation, an LLM exception leaves the run `done`); a corpus-string grep; a real
+  starter-PDF deterministic smoke. **Fake confirmer only — no API calls, no new
+  dependency, schema unchanged (`user_version` 3).**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -237,11 +275,11 @@ name. Key groups:
 | Group | Examples |
 |---|---|
 | storage | `FKL_DATABASE_PATH`, `FKL_UPLOADS_DIR` |
-| LLM | `FKL_LLM_MODEL`, `FKL_LLM_TEMPERATURE`, `ANTHROPIC_API_KEY` |
+| LLM | `FKL_LLM_MODEL`, `FKL_LLM_TEMPERATURE`, `FKL_PROMPT_VERSION`, `FKL_RELATIONSHIP_PROMPT_VERSION`, `ANTHROPIC_API_KEY` |
 | embeddings (reserved — retrieval rung deferred) | `FKL_EMBEDDING_MODEL`, `FKL_EMBEDDING_DIM` |
 | entity resolution | `FKL_ENTITY_LEGAL_SUFFIXES`, `FKL_ENTITY_PERSON_HONORIFICS`, `FKL_ENTITY_ANAPHORA`, `FKL_ENTITY_RENAME_PREDICATES`, `FKL_ENTITY_BLOCK_FUZZY_THRESHOLD`, `FKL_ENTITY_MERGE_FUZZY_THRESHOLD` |
 | retrieval (Phase 8; tuned by the eval harness) | `FKL_RETRIEVAL_TOP_K`, `FKL_RETRIEVAL_CANDIDATE_THRESHOLD`, `FKL_PREDICATE_SIMILARITY_THRESHOLD`, `FKL_RETRIEVAL_WEIGHT_ENTITY`, `FKL_RETRIEVAL_WEIGHT_PREDICATE`, `FKL_RETRIEVAL_WEIGHT_BM25`, `FKL_RETRIEVAL_WEIGHT_EMBEDDING` (reserved), `FKL_RETRIEVAL_MIN_SHARED_TOKENS`, `FKL_RETRIEVAL_BUCKET_MAX` |
-| numeric comparison | `FKL_NUMERIC_EQUIVALENCE_TOLERANCE`, `FKL_NUMERIC_CONTRADICTION_THRESHOLD` |
+| reasoning (Phase 9; tuned by the eval harness) | `FKL_NUMERIC_EQUIVALENCE_TOLERANCE`, `FKL_NUMERIC_CONTRADICTION_THRESHOLD`, `FKL_PREDICATE_SIMILARITY_THRESHOLD`, `FKL_RELATIONSHIP_CONFIDENCE_THRESHOLD` |
 | ingestion | `FKL_MAX_UPLOAD_MB`, `FKL_MAX_PAGES`, `FKL_OCR_MIN_CHARS`, `FKL_CHUNK_TARGET_CHARS`, `FKL_CHUNK_OVERLAP_CHARS` |
 
 ## Project layout
@@ -257,15 +295,16 @@ app/
   ingest.py     # Phase 2 — corpus-agnostic PDF ingestion service (ingest_pdf)
   facts.py      # Phase 3 — fact/evidence/relationship persistence + validation
   extract.py    # Phase 4 — candidate fact extraction (extract_document, extraction_summary)
-  llm.py        # Phase 4/7 — Anthropic clients (AnthropicExtractor, AnthropicEntityConfirmer)
+  llm.py        # Phase 4/7/9 — Anthropic clients (AnthropicExtractor, AnthropicEntityConfirmer, AnthropicRelationshipConfirmer)
   verify.py     # Phase 5 — deterministic evidence verification (verify_document, verify_fact)
   normalize.py  # Phase 6 — deterministic numeric/date/unit/period normalization (normalize_document)
   entities.py   # Phase 7 — entity resolution (resolve_document, resolution_summary)
   retrieve.py   # Phase 8 — bounded candidate-pair retrieval (retrieve_candidates, retrieval_summary)
   signals.py    # Phase 8 — deterministic comparison signals (signals.compute)
-  prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md)
-scripts/        # smoke_extract.py, smoke_retrieve.py — offline/manual smoke tests
-tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve (+ conftest, fakes)
+  reason.py     # Phase 9 — relationship reasoning (reason_document, reason_pair, deterministic_verdict)
+  prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md, relationship_v1.md)
+scripts/        # smoke_extract.py, smoke_retrieve.py, smoke_reason.py — offline/manual smoke tests
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

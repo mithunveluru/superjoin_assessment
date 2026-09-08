@@ -341,3 +341,62 @@ reconciliation cases); classifying relationships in retrieval (that is Phase 9).
 **Revisit when:** the eligible set outgrows ~1e4 facts (swap the inverted index
 for an ANN index — `retrieve_candidates` return type hides it), or Phase 10
 shows lexical recall missing cross-entity synonym pairs (add the embedding rung).
+
+## D23 — Phase 9 reasoning: deterministic verdict first and final; LLM proposes, never decides
+
+**Decision:** `app/reason.py` classifies a Phase-8 `CandidatePair` in two stages.
+`deterministic_verdict(signals)` runs a fixed, config-thresholded rule ladder
+that returns a final category for every case it can settle
+(`CORROBORATES` / `CONTRADICTS` / `DIFFERENT_CONTEXT` / `TEMPORAL_EVOLUTION` /
+`UNCERTAIN`). Only when it returns `None` — a genuinely *semantic* question
+(predicate synonymy, statement polarity) — is a confirmer consulted, and its
+proposal is re-checked by `_validate_llm`, which can `accept` / `override` /
+`downgrade` it. Deterministic logic therefore has the first and the last word.
+**Why:**
+- The signals for numeric equality/inequality, units, currency, period, scope,
+  modality, and provenance are already computed deterministically (Phase 6/8).
+  Letting the LLM re-decide them would reintroduce non-determinism and cost for
+  no gain, and would risk it "reconciling" a real contradiction or inventing one.
+- The assignment's core risk is a *false* CONTRADICTS/CORROBORATES. Conservative
+  deterministic rules + an aggressive `UNCERTAIN` default (used whenever entity,
+  period, predicate, or comparison semantics are unclear) is the safe posture.
+- The system must run with **no API key**. Every deterministic category is
+  produced without one; a missing confirmer only means the residual semantic
+  pairs become `UNCERTAIN`, never that the run fails.
+**Category definitions (conservative).** `CORROBORATES` needs same entity,
+equivalent predicate, compatible period (`equal`/`overlaps` for numeric),
+no scope conflict, comparable modality, and — for numbers — unit-equivalence with
+`base_value_delta_pct ≤ FKL_NUMERIC_EQUIVALENCE_TOLERANCE`. `CONTRADICTS` needs
+the same context *and* `base_value_delta_pct > FKL_NUMERIC_CONTRADICTION_THRESHOLD`
+(the gap between the two tolerances is `UNCERTAIN`, not a coin flip).
+`DIFFERENT_CONTEXT` is chosen whenever a `scope_conflict`, a currency/unit
+difference, a period-type difference, or a modality difference could explain the
+gap — `context_dimension` names it. `TEMPORAL_EVOLUTION` is distinct periods
+(`adjacent`/`disjoint`/`same_year`) + comparable modality + a changed value/
+statement — "different numbers across different periods" is never a contradiction.
+`UNCERTAIN` is the default for everything unsettled.
+**Persistence.** Reuses the Phase-3 `relationships` table and `add_relationship`
+(canonical `(min,max)`, first-write-wins → idempotent). Phase 3 already reserved
+`llm_used` / `llm_proposed_category` / `validation_action` / `validation_notes`;
+Phase 9 wires them into `RelationshipIn` and the INSERT (additive, backward
+compatible — no migration). Every `UNCERTAIN` also writes a
+`failures(relationship_uncertain)` row so `GET /failures` (Phase 11) surfaces the
+non-decisions. A relationship is only ever written between two
+`ELIGIBLE_FOR_REASONING` facts (guard in `reason_pair` and in `add_relationship`).
+**LLM contract.** `AnthropicRelationshipConfirmer.classify_relationship` receives
+a minimal structured packet (the two facts' fields + evidence quotes + the signal
+set — never the corpus), returns strict json-schema output, and is explicitly
+instructed not to invent values/periods/units/scope, not to override evidence or
+normalized numbers, not to convert currencies, and to prefer `UNCERTAIN`. Prompt
+is versioned (`app/prompts/relationship_v1.md`, `FKL_RELATIONSHIP_PROMPT_VERSION`).
+**Confidence** is a documented function of the signals, not a probability — it
+scales with the value delta relative to the two tolerances, is capped at the
+LLM's own confidence when used, and at 0.6 when either side is `PARTIAL`.
+**Rejected:** "LLM classifies, we log it" (unaccountable, non-deterministic,
+needs a key); pure rules with no semantic step (can't judge predicate synonymy or
+statement polarity); a second relationship store or a schema redesign (the
+Phase-3 table already fits); forcing a binary CORROBORATES/CONTRADICTS instead of
+`UNCERTAIN`; re-running retrieval inside Phase 9.
+**Revisit when:** Phase 10's harness has labelled properties — tune the tolerance
+knobs and the confidence formula against them; consider an `add_relationship`
+upsert if re-running reasoning in place (not just on a fresh DB) becomes a need.

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 8192       # per-chunk extraction output cap
     llm_timeout_seconds: float = 120.0
     prompt_version: str = "v1"       # extraction prompt version (app/prompts/extraction_<v>.md)
+    relationship_prompt_version: str = "v1"  # app/prompts/relationship_<v>.md (Phase 9)
 
     # --- embeddings (used from Phase 8) --------------------------------------
     embedding_provider: str = "fastembed"

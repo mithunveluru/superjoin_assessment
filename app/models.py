@@ -188,6 +188,13 @@ class RelationshipIn(BaseModel):
     run_id: int | None = None
     model_name: str | None = None
     prompt_version: str | None = None
+    # Phase 9 — LLM proposal vs deterministic validation (both persisted)
+    llm_used: bool = False
+    llm_proposed_category: str | None = None
+    validation_action: Literal["accepted", "overridden", "downgraded", "not_applicable"] = (
+        "not_applicable"
+    )
+    validation_notes: str | None = None
 
 
 # --- Phase 4: candidate fact extraction ----------------------------------
@@ -445,3 +452,62 @@ class CandidatePair(BaseModel):
     retrieval_score: float
     retrieval_methods: list[str]     # {"entity","predicate_exact","predicate_similar","lexical"}
     signals: SignalSet
+
+
+# --- Phase 9: relationship reasoning --------------------------------
+
+ValidationAction = Literal["accepted", "overridden", "downgraded", "not_applicable"]
+
+
+class RelationshipProposal(BaseModel):
+    """The LLM's *semantic proposal* for one candidate pair (see
+    ``app.llm.AnthropicRelationshipConfirmer``). Vocabulary is a plain ``str`` on
+    purpose — deterministic code in ``app.reason`` validates and may override it."""
+
+    relationship: str = ""            # raw category string from the model
+    confidence: float = 0.0
+    reason: str = ""
+    context_differences: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    error_code: str | None = None    # api_error | malformed_response | invalid_category | ...
+    error_detail: str | None = None
+
+
+class RelationshipDecision(BaseModel):
+    """Outcome of ``app.reason.reason_pair`` for one candidate pair — the final
+    category plus everything needed to explain and reproduce it."""
+
+    fact_a_id: int
+    fact_b_id: int
+    category: RelationshipCategory
+    context_dimension: str | None = None
+    confidence: float
+    reasoning: str
+    deterministic_signals: dict[str, Any] = Field(default_factory=dict)
+    method: Literal["deterministic", "llm_confirmed", "uncertain_no_llm"]
+    llm_used: bool = False
+    llm_proposed_category: str | None = None
+    validation_action: ValidationAction = "not_applicable"
+    validation_notes: str | None = None
+
+
+class DocReasoningSummary(BaseModel):
+    """Outcome of ``app.reason.reason_document`` — lightweight observability
+    (see also ``app.reason.reasoning_summary``)."""
+
+    run_id: int
+    document_id: int
+    status: str
+    candidate_pairs: int = 0
+    deterministic_decisions: int = 0
+    llm_confirmed_decisions: int = 0
+    uncertain_decisions: int = 0
+    relationships_created: int = 0
+    relationships_existing: int = 0
+    llm_calls: int = 0
+    llm_errors: int = 0
+    validation_overrides: int = 0
+    skipped: int = 0
+    errors: int = 0
+    by_category: dict[str, int] = Field(default_factory=dict)
+    error: str | None = None

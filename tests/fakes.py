@@ -7,7 +7,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.models import EntityConfirmation, LLMExtraction, RawExtraction
+from app.models import (
+    EntityConfirmation,
+    LLMExtraction,
+    RawExtraction,
+    RelationshipProposal,
+)
 
 
 class FakeLLM:
@@ -102,3 +107,32 @@ def api_error(code: str = "api_error", detail: str = "boom") -> LLMExtraction:
         raw_text=None, parsed=None, error_code=code, error_detail=detail,
         model=FakeLLM.model, prompt_version=FakeLLM.prompt_version,
     )
+
+
+class FakeRelationshipConfirmer:
+    """Same surface as ``app.llm.AnthropicRelationshipConfirmer``:
+    ``.classify_relationship(packet) -> RelationshipProposal``.
+
+    ``script`` is consumed one item per call:
+      * ``RelationshipProposal`` -> returned verbatim
+      * ``dict``                 -> kwargs for ``RelationshipProposal``
+      * ``Exception``            -> raised
+    Exhausted script -> a conservative UNCERTAIN proposal.
+    """
+
+    model = "fake-sonnet"
+    prompt_version = "test-v1"
+
+    def __init__(self, script: list[Any] | None = None):
+        self.script = list(script or [])
+        self.calls: list[dict] = []
+
+    def classify_relationship(self, packet: dict) -> RelationshipProposal:
+        self.calls.append({"packet": packet})
+        item = self.script.pop(0) if self.script else RelationshipProposal(
+            relationship="UNCERTAIN", confidence=0.2, reason="fake default")
+        if isinstance(item, Exception):
+            raise item
+        if isinstance(item, RelationshipProposal):
+            return item
+        return RelationshipProposal(**item)

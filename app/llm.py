@@ -16,7 +16,12 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings
-from app.models import EntityConfirmation, LLMExtraction, RawExtraction
+from app.models import (
+    EntityConfirmation,
+    LLMExtraction,
+    RawExtraction,
+    RelationshipProposal,
+)
 
 PROMPTS_DIR = Path(__file__).with_name("prompts")
 
@@ -236,3 +241,77 @@ class AnthropicEntityConfirmer:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             return EntityConfirmation(same=False, error_code="malformed_response",
                                      error_detail=str(e))
+
+
+# --- Phase 9: relationship confirmation ---------------------------------------
+_RELATIONSHIP_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["relationship", "confidence", "reason"],
+    "properties": {
+        "relationship": {"type": "string", "enum": [
+            "CORROBORATES", "CONTRADICTS", "DIFFERENT_CONTEXT",
+            "TEMPORAL_EVOLUTION", "UNCERTAIN",
+        ]},
+        "confidence": {"type": "number"},
+        "reason": {"type": "string"},
+        "context_differences": {"type": ["array", "null"], "items": {"type": "string"}},
+        "uncertainties": {"type": ["array", "null"], "items": {"type": "string"}},
+    },
+}
+
+
+class AnthropicRelationshipConfirmer:
+    """Proposes ONE relationship category + reasoning for a candidate pair from a
+    structured packet. Deterministic code in ``app.reason`` validates and may
+    override the proposal (it never has the last word). Same lazy-import,
+    no-sampling shape as the other clients; never used from tests."""
+
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or get_settings()
+        self.model = self.settings.llm_model
+        self.prompt_version = self.settings.relationship_prompt_version
+        self._system = load_prompt(self.prompt_version, kind="relationship")
+        import anthropic
+
+        self._anthropic = anthropic
+        self._client = anthropic.Anthropic(timeout=self.settings.llm_timeout_seconds)
+
+    def classify_relationship(self, packet: dict) -> RelationshipProposal:
+        a = self._anthropic
+        user = (
+            "Two comparable facts and the deterministic signals about how they "
+            "relate:\n\n" + json.dumps(packet, indent=2, ensure_ascii=False, default=str)
+        )
+        try:
+            resp = self._client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                system=self._system,
+                messages=[{"role": "user", "content": user}],
+                output_config={
+                    "effort": self.settings.llm_effort,
+                    "format": {"type": "json_schema", "schema": _RELATIONSHIP_SCHEMA},
+                },
+            )
+        except (a.AuthenticationError, a.RateLimitError, a.APITimeoutError,
+                a.APIConnectionError, a.APIStatusError) as e:
+            return RelationshipProposal(error_code="api_error", error_detail=str(e))
+
+        text = next(
+            (b.text for b in resp.content if getattr(b, "type", None) == "text"), None
+        )
+        if not text:
+            return RelationshipProposal(error_code="malformed_response",
+                                       error_detail="no text block")
+        try:
+            data = json.loads(text)
+            return RelationshipProposal(
+                relationship=str(data["relationship"]),
+                confidence=float(data.get("confidence") or 0.0),
+                reason=str(data.get("reason") or ""),
+                context_differences=list(data.get("context_differences") or []),
+                uncertainties=list(data.get("uncertainties") or []),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            return RelationshipProposal(error_code="malformed_response", error_detail=str(e))

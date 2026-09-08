@@ -336,11 +336,13 @@ def add_relationship(conn: sqlite3.Connection, rel: RelationshipIn) -> int:
     return conn.execute(
         "INSERT INTO relationships "
         "(fact_a_id, fact_b_id, category, context_dimension, deterministic_signals, "
+        " llm_used, llm_proposed_category, validation_action, validation_notes, "
         " reasoning, confidence, model_name, prompt_version, run_id, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             lo, hi, rel.category, rel.context_dimension, _json(rel.deterministic_signals),
-            rel.reasoning, rel.confidence, rel.model_name, rel.prompt_version, rel.run_id,
-            _now(),
+            int(rel.llm_used), rel.llm_proposed_category, rel.validation_action,
+            rel.validation_notes, rel.reasoning, rel.confidence, rel.model_name,
+            rel.prompt_version, rel.run_id, _now(),
         ),
     ).lastrowid

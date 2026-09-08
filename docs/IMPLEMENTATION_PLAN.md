@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 ✅ · Phase 10 not started.
 
 | Phase | Title |
 |---|---|
@@ -507,40 +507,108 @@ enhancement.
 
 ---
 
-## PHASE 9 — Relationship reasoning + explanations
+## PHASE 9 — Relationship reasoning + explanations  ✅ COMPLETE
 
-**Objective:** **LLM proposes** a category + reasoning from a structured context
-packet; **`signals.validate()` decides** the final category against deterministic
-constraints. Persist both (`llm_proposed_category`, `validation_action`).
-**Files:** `app/reason.py`, `app/llm.py` (`classify_relationship`),
-`tests/test_reason.py`.
-**Tasks:** build the packet (Fact A/B, both quotes, reporting periods,
-publication dates/vintage, scope, units, modality, all deterministic signals);
-`classify_relationship` returns `{category, context_dimension, reasoning,
-confidence}` (structured, `temperature=0`). `signals.validate(proposed, signals)`
-rules, e.g.:
-- unit‑equivalent after normalization + `base_value_delta_pct ≤ tol` + same
-  period + no scope conflict ⇒ force `CORROBORATES` (override any `CONTRADICTS`).
-- both `HISTORICAL`/`ASSERTED`, same entity/predicate, **disjoint** periods,
-  values differ ⇒ prefer `TEMPORAL_EVOLUTION` over `CONTRADICTS`.
-- `scope_conflict ≠ ∅` explaining the gap ⇒ prefer `DIFFERENT_CONTEXT`
-  (`context_dimension` = the scope key).
-- different modality (e.g. `FORECAST` vs `HISTORICAL`) ⇒ not `CONTRADICTS`;
-  `DIFFERENT_CONTEXT`/`UNCERTAIN`.
-- `vintage_differs` + same period ⇒ `TEMPORAL_EVOLUTION` (revision) or
-  `DIFFERENT_CONTEXT`.
-- entity_match < threshold or `period_relation=unknown` or either fact `PARTIAL`
-  with weak signals ⇒ `UNCERTAIN`.
-Record `validation_action` (`accepted`/`overridden`/`downgraded`) + `notes`; cap
-`confidence` when a fact is `PARTIAL`. Only `reasoning_eligible=1` facts are
-considered (guard‑tested).
-**Acceptance:** synthetic pairs produce each of the five categories with correct
-`validation_action`; the "director active vs resigned July 2024" shape, given
-bounded historical periods, classifies as `TEMPORAL_EVOLUTION` **or**
-`DIFFERENT_CONTEXT`, **not** `CONTRADICTS`, purely from dates/modality; an
-LLM `CONTRADICTS` on unit‑equivalent numbers is overridden to `CORROBORATES`.
-**Gate:** all five categories; deterministic validation demonstrably overrides a
-wrong LLM proposal; no ineligible fact in a relationship.
+**Objective:** turn a Phase‑8 `CandidatePair` + its `SignalSet` into one of the
+five relationship categories, persisted with a full rationale. **Deterministic
+logic first and final**; the LLM is an *optional proposer* for genuinely semantic
+questions and its proposal is always re‑checked deterministically.
+**Files shipped:** `app/reason.py` (`reason_pair`, `reason_document`,
+`deterministic_verdict`, `_validate_llm`, `_confidence`, `reasoning_summary`,
+`ReasonError`), `app/llm.py` (`AnthropicRelationshipConfirmer`,
+`classify_relationship`), `app/prompts/relationship_v1.md`, `app/models.py`
+(`RelationshipProposal`, `RelationshipDecision`, `DocReasoningSummary`,
+`ValidationAction`), `app/config.py` (`relationship_prompt_version`),
+`app/facts.py` + `app/models.py` (`RelationshipIn` / `add_relationship` now carry
+`llm_used` / `llm_proposed_category` / `validation_action` / `validation_notes`,
+the columns Phase‑3's schema already reserved), `tests/test_reason.py` (42 tests),
+`scripts/smoke_reason.py`. **No migration** (`user_version` stays 3). **No new
+dependency.**
+
+**Pipeline** `CandidatePair → deterministic verdict → (optional) LLM proposal →
+deterministic validation → final category → persist`. Phase 9 does **not**
+retrieve, re‑resolve entities, re‑verify evidence, or re‑normalize — it consumes
+Phase 5–8 output. Read‑only w.r.t. facts and evidence; the only writes are
+`relationships` rows (via the existing `add_relationship`) and
+`relationship_uncertain` `failures` rows.
+
+**`deterministic_verdict(signals)`** — first matching rule wins; all thresholds
+from `Settings` (`numeric_equivalence_tolerance`, `numeric_contradiction_threshold`,
+`predicate_similarity_threshold`). Precedence: entity not same → `UNCERTAIN`;
+`period_relation=unknown` → `UNCERTAIN`; weak predicate → `UNCERTAIN`; fact‑type
+mismatch w/o numeric comparability → `UNCERTAIN`; `percentage_vs_absolute` →
+`UNCERTAIN`; `scope_conflict` → `DIFFERENT_CONTEXT` (`context_dimension="scope:"+key`);
+`modality` not comparable → `DIFFERENT_CONTEXT`(`modality`) unless both the *same*
+non‑actual modality and equivalent → `CORROBORATES`; then the numeric branch —
+different currency/unit → `DIFFERENT_CONTEXT`(`currency`/`units`); distinct
+periods (`adjacent`/`disjoint`/`same_year`) + `Δ% > tol` → `TEMPORAL_EVOLUTION`;
+`contains` + `Δ% > tol` → `DIFFERENT_CONTEXT`(`period_type`); `equal`/`overlaps` →
+`Δ% ≤ tol` & sign match → `CORROBORATES`, `Δ% > contradiction_threshold` →
+`CONTRADICTS`, in between → `UNCERTAIN`; `period missing` → `UNCERTAIN`. Semantic
+pairs: distinct periods + differing statements + comparable modality →
+`TEMPORAL_EVOLUTION`; identical claim → `CORROBORATES`; otherwise `None` → the
+semantic step.
+
+**Semantic step.** No confirmer → `UNCERTAIN` (the system produces every
+deterministic category with no API key). With a confirmer:
+`classify_relationship` sends a **minimal structured packet** (both facts'
+subject/predicate/object/value/period/scope/modality/evidence‑quote + the full
+signal set — never the corpus) and returns
+`{relationship, confidence, reason, context_differences, uncertainties}` via
+`output_config.format` json_schema, no sampling params. The proposal is validated
+(`_validate_proposal`: category ∈ the 5, confidence ∈ [0,1], non‑empty reason —
+else `UNCERTAIN`) then run through **`_validate_llm`** which can `accept` /
+`override` / `downgrade`: `CONTRADICTS` on tol‑equal numbers under identical
+context → `CORROBORATES` (overridden); any `CONTRADICTS`/`CORROBORATES` with a
+`scope_conflict` → `DIFFERENT_CONTEXT` (overridden); `CONTRADICTS` on distinct
+periods → `TEMPORAL_EVOLUTION` (overridden); `CONTRADICTS` on mixed modality →
+`DIFFERENT_CONTEXT` (downgraded); `CORROBORATES` on `Δ% > contradiction_threshold`
+→ `UNCERTAIN` (downgraded); `period` unknown/missing → `UNCERTAIN` (downgraded).
+An LLM exception is caught → `UNCERTAIN`; one bad pair never fails the run.
+
+**Confidence** is an explicit function of the signals (documented in `_confidence`,
+not a calibrated probability): forced `CORROBORATES`/`CONTRADICTS` scale with the
+value delta vs the two tolerances; context/temporal ≈ `0.55 + 0.2·predicate_sim`;
+`UNCERTAIN` = 0.25; capped at the LLM's own confidence when it was used; capped at
+0.6 when either side's evidence is `PARTIAL`.
+
+**Persistence.** `reason_document(document_id)` opens a `run_type='reason'` run,
+takes `retrieve_candidates(document_id=…)`, classifies each pair, and writes one
+`relationships` row per pair through `add_relationship` (canonical `(min,max)`,
+first‑write‑wins → **idempotent, no duplicates**), storing `category`,
+`context_dimension`, `confidence`, `reasoning`, the full `deterministic_signals`
+JSON, `llm_used`, `llm_proposed_category`, `validation_action`, `validation_notes`,
+`run_id`, and model/prompt metadata when the LLM was used. Every `UNCERTAIN` pair
+also gets a `failures(relationship_uncertain)` row. Only
+`ELIGIBLE_FOR_REASONING` + `reasoning_eligible=1` facts participate (guard in
+`reason_pair` **and** the `add_relationship` gate); `QUARANTINED` / `CANDIDATE` /
+`NORMALIZED` / `UNVERIFIED` facts are excluded upstream and rejected if reached.
+
+**Acceptance (met):** synthetic pairs produce each of the five categories
+deterministically with no LLM; the "director active vs resigned July 2024" shape
+→ `TEMPORAL_EVOLUTION` from dates + modality, not `CONTRADICTS`;
+`_validate_llm` demonstrably overrides an LLM `CONTRADICTS` on tol‑equal numbers
+to `CORROBORATES` and downgrades/overrides the scope/period/modality cases;
+numeric edge cases (exact, within tol, between the thresholds, sign flip,
+`%`‑vs‑absolute, missing base value) each land on the right rung;
+`reason_document` is byte‑identical on a wipe‑and‑re‑run and creates no
+duplicates; quarantined/unverified facts appear in no relationship;
+`reason_pair` never mutates a fact's lifecycle or evidence; an LLM exception
+leaves the run `done`. Deterministic real‑corpus smoke (3 Delhivery PDFs,
+LLM‑free fact harvest): 42 eligible facts → 383 candidate pairs → 383
+relationships (CORROBORATES 22, TEMPORAL_EVOLUTION 9, CONTRADICTS 4, UNCERTAIN
+348), 348 `relationship_uncertain` failures, 0 errors, **identical on re‑run**.
+The harvested facts are crude (real extraction needs the LLM); the smoke
+exercises the *mechanism*, and the 4 `CONTRADICTS` are **not** a claim that the
+corpus contains a contradiction.
+**Gate:** all five categories; deterministic validation overrides a wrong LLM
+proposal; no ineligible fact in a relationship; runs without an API key. **Met.**
+
+**Limitations (carried to RISKS):** semantic pairs with no distinct period and no
+identical claim are `UNCERTAIN` without a confirmer (by design); the confidence
+formula is heuristic and untuned (Phase 10); broad Phase‑8 recall means most
+pairs are `UNCERTAIN`; `add_relationship` is first‑write‑wins, so a re‑run after a
+rule change needs a fresh `relationships` table.
 
 ---
 

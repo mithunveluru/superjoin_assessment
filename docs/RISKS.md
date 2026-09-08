@@ -81,7 +81,65 @@ deterministic comparison signals (period relation, unit equivalence,
 `base_value` delta, scope conflict, modality pair, vintage difference,
 publication gap) with a **constrained** LLM semantic step: the LLM proposes an
 interpretation, deterministic logic validates it against those signals and has
-the final say. Not implemented yet.
+the final say.
+
+## Relationship reasoning — deterministic-first, conservative (Phase 9, done)
+
+`app/reason.py` classifies each Phase-8 candidate pair. Accepted positions and
+their residual risks:
+
+- **False contradiction.** Guarded on several axes at once: `CONTRADICTS` needs
+  same entity, equivalent predicate, `period_relation ∈ {equal, overlaps}`, no
+  `scope_conflict`, comparable modality (both actual/historical), unit-equivalence
+  after Phase-6 normalization, **and** `base_value_delta_pct >
+  FKL_NUMERIC_CONTRADICTION_THRESHOLD`. Distinct periods → `TEMPORAL_EVOLUTION`;
+  a scope/currency/unit/period-type/modality difference → `DIFFERENT_CONTEXT`;
+  the band between the equivalence and contradiction tolerances → `UNCERTAIN`.
+  Residual risk: a real contradiction where the two facts happen to differ in an
+  *unstated* scope the extractor didn't capture will be read as comparable — the
+  mitigation is upstream (scope extraction), not here.
+- **False corroboration.** `CORROBORATES` needs the full comparable-context set
+  **and** `base_value_delta_pct ≤ FKL_NUMERIC_EQUIVALENCE_TOLERANCE` with a sign
+  match; semantic corroboration is only asserted deterministically when the two
+  statements are literally the same after normalization, otherwise it needs the
+  LLM. Residual risk: two numbers equal by coincidence under a genuinely
+  different (but unrecorded) definition. Same upstream mitigation.
+- **Incomplete context → `UNCERTAIN`, aggressively.** Unresolved entity,
+  `period_relation ∈ {unknown, missing}`, weak predicate similarity,
+  `percentage_vs_absolute`, missing base values, or an un-established unit all
+  short-circuit to `UNCERTAIN`. On the real corpus most pairs are `UNCERTAIN` —
+  by design; broad Phase-8 recall plus a conservative reasoner favours abstention.
+- **LLM variability.** The confirmer is only consulted for semantic pairs the
+  signals cannot settle, runs with no sampling params and a versioned prompt, and
+  its output is a *proposal* that `_validate_llm` can override or downgrade
+  (equal-number `CONTRADICTS` → `CORROBORATES`; scope conflict → `DIFFERENT_CONTEXT`;
+  distinct periods → `TEMPORAL_EVOLUTION`; mixed modality → not `CONTRADICTS`;
+  unknown period → `UNCERTAIN`). Runs are only deterministic **without** the LLM;
+  with it, the LLM-touched subset can vary, and `relationships.llm_used`
+  records which rows those are. A malformed/failed/exception response → `UNCERTAIN`
+  (never a crash, never a fabricated category).
+- **Confidence is heuristic.** `_confidence` is an explicit function of the
+  signals, **not** a calibrated probability; it is capped at the LLM's own
+  confidence when used and at 0.6 when either side's evidence is `PARTIAL`.
+  Phase 10's harness is where the tolerances and this formula get evidence.
+- **Numeric edge cases.** Percentages vs absolutes and ratios vs counts are never
+  treated as interchangeable (`percentage_vs_absolute` → `UNCERTAIN`); no FX
+  conversion (different currency → `DIFFERENT_CONTEXT`); only Phase-6
+  `base_value` is compared — Phase 9 runs no second normalizer.
+- **Corpus-dependent category coverage.** The starter corpus is **not assumed**
+  to contain a natural contradiction. The deterministic real-corpus smoke
+  produced a few `CONTRADICTS` rows, but those are between **crudely
+  regex-harvested** facts (real extraction needs an API key) and are **not** a
+  claim that the documents disagree. Genuine category coverage on real extracted
+  facts is a Phase 10/13 question. Missing categories are only ever shown from
+  clearly-labelled synthetic unit-test fixtures.
+- **`add_relationship` is first-write-wins.** Re-running `reason_document` on the
+  same DB is a safe no-op (idempotent, no duplicates) but does **not** refresh a
+  changed verdict — a rule change needs a fresh `relationships` table. Persisting
+  reasoning in place would need an upsert; deferred.
+- **Dependencies / API.** No new dependency. The engine and every deterministic
+  category work with no `ANTHROPIC_API_KEY`; the key only enables the semantic
+  step for the residual ambiguous pairs.
 
 ## Candidate retrieval — lexical baseline, broad by design (Phase 8, done)
 
