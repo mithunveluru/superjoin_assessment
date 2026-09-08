@@ -78,9 +78,19 @@ class Settings(BaseSettings):
     retrieval_candidate_threshold: float = 0.55
     predicate_similarity_threshold: float = 0.60
     relationship_confidence_threshold: float = 0.50
+    # retrieval_score = (w_entity·same_entity + w_predicate·predicate_sim
+    #                    + w_bm25·lexical_overlap) / (w_entity + w_predicate + w_bm25)
+    # w_embedding is reserved for the deferred embedding rung (Phase 8 ships
+    # deterministic lexical retrieval only — no fastembed in this environment).
     retrieval_weight_embedding: float = 0.5
     retrieval_weight_predicate: float = 0.3
     retrieval_weight_bm25: float = 0.2
+    retrieval_weight_entity: float = 0.4
+    # a content-token block is dropped once it covers more facts than this (the
+    # token is not discriminative); entity / exact-predicate blocks are never dropped
+    retrieval_bucket_max: int = 400
+    # a token-only candidate pair needs at least this many shared content tokens
+    retrieval_min_shared_tokens: int = 2
 
     # --- deterministic numeric comparison ---------------------------------------
     numeric_equivalence_tolerance: float = 0.02

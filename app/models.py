@@ -377,3 +377,71 @@ class DocResolutionSummary(BaseModel):
     errors: int = 0
     by_method: dict[str, int] = Field(default_factory=dict)
     error: str | None = None
+
+
+# --- Phase 8: candidate retrieval + deterministic signals ------------
+
+PeriodRelation = Literal[
+    "equal", "same_year", "contains", "overlaps", "adjacent", "disjoint", "unknown", "missing"
+]
+
+
+class SignalSet(BaseModel):
+    """Deterministic, inspectable comparison signals for one ordered candidate
+    pair (see ``app.signals.compute``). Every field is derived only from data
+    already persisted by Phases 1-7 — no LLM, no unit conversion beyond the
+    Phase-6 normalized representation. A signal describes a difference; it never
+    decides a relationship (that is Phase 9)."""
+
+    # entity
+    entity_relation: Literal["same", "different", "unresolved"]
+    subject_entity_id_a: int | None = None
+    subject_entity_id_b: int | None = None
+    # predicate
+    predicate_exact: bool = False
+    predicate_similarity: float = 0.0        # rapidfuzz token_set_ratio, 0-1
+    predicate_token_overlap: float = 0.0     # Jaccard over content tokens, 0-1
+    # fact type
+    fact_type_a: str
+    fact_type_b: str
+    fact_type_match: bool
+    # numeric (populated only when both facts are numeric with a base_value)
+    numeric_comparable: bool = False
+    base_value_a: float | None = None
+    base_value_b: float | None = None
+    base_value_abs_diff: float | None = None
+    base_value_delta_pct: float | None = None   # |a-b| / max(|a|,|b|)
+    sign_match: bool | None = None
+    percentage_vs_absolute: bool | None = None  # one is_percentage, the other not
+    ratio_a_to_b: float | None = None
+    unit_equivalent: bool | None = None         # comparable after Phase-6 normalization
+    # unit / currency
+    unit_relation: Literal["same", "different", "missing"] = "missing"
+    currency_relation: Literal["same", "different", "missing"] = "missing"
+    # period (reporting period only — never the document date / vintage)
+    period_relation: PeriodRelation = "missing"
+    # scope
+    scope_relation: Literal["same", "overlap", "different", "missing"] = "missing"
+    scope_conflict: list[str] = Field(default_factory=list)  # keys present in both, values differ
+    # modality
+    modality_a: str
+    modality_b: str
+    modality_relation: Literal["same", "different"]
+    modality_comparable: bool                # both in {ASSERTED, HISTORICAL}
+    # provenance
+    same_document: bool
+    publication_gap_days: int | None = None  # |publication_date_a - publication_date_b|
+    vintage_differs: bool = False
+    reasons: list[str] = Field(default_factory=list)
+
+
+class CandidatePair(BaseModel):
+    """One retrieved candidate pair. ``fact_a_id < fact_b_id`` always (the same
+    canonical order ``relationships`` uses). A retrieved pair is a candidate for
+    downstream relationship reasoning — nothing more."""
+
+    fact_a_id: int
+    fact_b_id: int
+    retrieval_score: float
+    retrieval_methods: list[str]     # {"entity","predicate_exact","predicate_similar","lexical"}
+    signals: SignalSet

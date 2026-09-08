@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 not started.
 
 | Phase | Title |
 |---|---|
@@ -431,25 +431,79 @@ use; schema unchanged. **Met.**
 
 ---
 
-## PHASE 8 — Candidate retrieval + deterministic signals
+## PHASE 8 — Candidate retrieval + deterministic signals  ✅ COMPLETE
 
 **Objective:** bounded candidate‑pair generation (config‑driven weights &
 thresholds) + `signals.compute(a,b)` producing the full deterministic signal set.
-**Files:** `app/retrieve.py`, `app/signals.py`, `tests/test_retrieve.py`,
-`tests/test_signals.py`.
-**Tasks:** embed eligible facts (`fastembed`); per fact block on
-entity/alias/normalization‑key; rank others by
-`w_e·cos(fact) + w_p·cos(pred) + w_b·bm25` with `w_*` and `top_k` and
-`candidate_threshold` from `Settings`; ordered‑pair dedup; skip already‑scored
-pairs. `signals.compute`: `entity_match`, `predicate_sim`, `unit_equivalent`
-(after normalization, incl. Cr↔mn, %↔ratio; INR≠USD), `base_value_delta_pct`,
-`period_relation` (equal/overlaps/contains/disjoint/unknown),
-`scope_conflict[]`, `modality_pair`, `publication_gap_days`, `vintage_differs`.
-**Acceptance:** pair count ≤ `top_k · n_eligible`; every pair shares a block;
-re‑run adds no pairs; a DATASET_ANALYSIS candidate (C1) is retrieved; signals on
-a hand‑built pair match expected values; all weights/thresholds come from config
-(changing `FKL_RETRIEVAL_TOP_K` changes output).
+Phase 8 answers *"which other facts are plausible candidates for comparison?"* —
+**not** *"are these facts related / contradictory?"* (that is Phase 9).
+**Files shipped:** `app/retrieve.py` (`retrieve_candidates`, `retrieval_summary`,
+`_score`), `app/signals.py` (`compute`, `predicate_signals`, `period_relation`,
+`scope_relation`, `content_tokens`), `app/models.py` (`SignalSet`,
+`CandidatePair`, `PeriodRelation`), `app/config.py` (`retrieval_weight_entity`,
+`retrieval_bucket_max`, `retrieval_min_shared_tokens`), `tests/test_retrieve.py`
+(16 tests), `tests/test_signals.py` (26 tests), `scripts/smoke_retrieve.py`. **No
+migration** (`user_version` stays 3 — every column needed already exists). **No
+new dependency** (`rapidfuzz` already present).
+
+**Retrieval strategy (Stage A).** Deterministic, high‑recall, read‑only.
+Embeddings are **deferred** — `fastembed`/`numpy` are not installed here, Phase 7
+already deferred the cosine rung, and the brief says not to force embeddings when
+the environment can't support them. `facts.embedding` stays NULL;
+`app/embed.py` is **not** created; `retrieval_weight_embedding` is reserved.
+1. Load every `ELIGIBLE_FOR_REASONING` fact (cross‑document).
+2. Inverted‑index blocking (near‑linear in output size, not a full O(n²) DB scan):
+   `entity` (same `subject_entity_id`), `predicate_exact` (identical
+   `predicate_norm`), `lexical` (≥ `FKL_RETRIEVAL_MIN_SHARED_TOKENS` shared
+   content tokens; a token covering > `FKL_RETRIEVAL_BUCKET_MAX` facts is dropped
+   as non‑discriminative).
+3. Score: `retrieval_score = (w_entity·same_entity + w_predicate·predicate_sim +
+   w_bm25·lexical_overlap) / (w_entity+w_predicate+w_bm25)`, all weights from
+   `Settings`. `predicate_sim` is deterministic `rapidfuzz.token_set_ratio`.
+4. Keep entity / exact‑predicate pairs regardless of score (strong structural
+   candidates); keep the rest at `score ≥ FKL_RETRIEVAL_CANDIDATE_THRESHOLD`.
+5. Keep top `FKL_RETRIEVAL_TOP_K` per fact (union), canonicalize to `(min,max)`
+   fact id, dedupe, sort → `≤ top_k · n_eligible` pairs.
+Candidate pairs are **transient** (returned, not persisted) — no candidate‑pair
+table, so "re‑run adds no pairs" holds by deterministic recomputation and there
+is zero lifecycle risk. Context differences never exclude a pair; they surface as
+signals in step 6.
+
+**Deterministic signals (Stage B) — `signals.compute(conn, a_id, b_id) →
+SignalSet`.** Every field derived only from Phases 1–7 data; no LLM, no unit
+conversion beyond the Phase‑6 normalized representation. `entity_relation`
+(same/different/unresolved); `predicate_exact` / `predicate_similarity` /
+`predicate_token_overlap`; `fact_type_*` + `fact_type_match`; numeric (both
+numeric w/ `base_value`): `base_value_abs_diff`, `base_value_delta_pct`,
+`sign_match`, `percentage_vs_absolute`, `ratio_a_to_b`, `unit_equivalent`;
+`unit_relation` / `currency_relation` (same/different/missing — INR≠USD, never
+FX‑converted); `period_relation`
+(equal/same_year/contains/overlaps/adjacent/disjoint/unknown/missing — reporting
+period only, never the document date); `scope_relation` + `scope_conflict[]`
+(generic dict‑key comparison, no hard‑coded scope names); `modality_a/b`,
+`modality_relation`, `modality_comparable`; `same_document`,
+`publication_gap_days`, `vintage_differs`; `reasons[]`.
+
+**Acceptance (met):** pair count `≤ top_k · n_eligible`; every pair shares a
+block; re‑run is byte‑identical (pairs, order, scores, signal values);
+`FKL_RETRIEVAL_TOP_K` change changes output; a C1‑shape pair (₹8,142 Cr FY24 ≡
+₹81,415.38 mn FY24, cross‑document, same entity, related predicate) is retrieved
+with `numeric_comparable`, `base_value_delta_pct < 0.01`, `unit_equivalent` and
+**no category**; only `ELIGIBLE_FOR_REASONING` facts participate
+(CANDIDATE/GROUNDED/NORMALIZED/QUARANTINED excluded); Phase 8 never changes a
+fact's lifecycle/evidence/eligibility and writes no relationship; signal helpers
+reproduce their worked cases exactly; `grep -niE` for corpus strings in
+`app/retrieve.py` + `app/signals.py` is clean. Deterministic real‑corpus smoke
+(3 Delhivery PDFs, LLM‑free fact harvest): 36 eligible facts → 322 candidate
+pairs (≤ 540), 197 cross‑document, identical on re‑run.
 **Gate:** retrieval bounded/blocked/idempotent; signals correct & config‑driven.
+**Met.**
+
+**Limitations (carried to RISKS):** lexical‑only retrieval misses true synonyms
+with zero shared tokens *unless* the two facts share a resolved entity (the
+primary path); broad entity blocking is high‑recall by design and yields many
+non‑meaningful pairs for Phase 9 to filter; embedding retrieval remains the next
+enhancement.
 
 ---
 

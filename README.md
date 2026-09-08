@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–7 of 15 complete; Phase 8 not started.** This repo contains
+> **Status: Phases 1–8 of 15 complete; Phase 9 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -60,8 +60,22 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > dominant entity, and only genuinely borderline pairs go to a single
 > `confirm_entities` LLM call (absent a key they are left unresolved, never
 > blind-merged). A `NORMALIZED` fact with verified evidence is then promoted to
-> `ELIGIBLE_FOR_REASONING`. No retrieval or
-> relationship inference exists yet — those are later phases, see
+> `ELIGIBLE_FOR_REASONING`. **Candidate retrieval + deterministic signals**
+> (`app/retrieve.py` + `app/signals.py` — no LLM, no embeddings): over the
+> reasoning-eligible facts only, an inverted-index blocker (same resolved entity,
+> identical normalized predicate, or shared content tokens) plus a
+> config-weighted `retrieval_score` and a per-fact top-K cap produce a bounded,
+> deterministic, cross-document set of `CandidatePair`s; each carries a
+> `SignalSet` of explicit comparison signals (`entity_relation`,
+> `predicate_similarity`, `unit_equivalent`, `base_value_delta_pct`,
+> `period_relation`, `scope_conflict`, `modality_comparable`,
+> `publication_gap_days`, `vintage_differs`, …). Phase 8 **retrieves candidates
+> for downstream reasoning — it does not classify relationships**, does not touch
+> a fact's lifecycle, and writes nothing. Context differences are signals, never
+> retrieval exclusions. Embedding retrieval is deferred (no local model in this
+> environment) and documented as the next enhancement. **Relationship
+> classification** (`CORROBORATES` / `CONTRADICTS` / …) does not exist yet — that
+> is Phase 9, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
 > positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
@@ -192,6 +206,22 @@ pytest
   entities/aliases/links, no new failures); `resolution_summary`; a grep asserting
   `app/entities.py` carries no corpus entity strings; a real starter-PDF smoke.
   Uses a fake confirmer — no API calls. Schema unchanged (`user_version` 3).
+- **Phase 8** covers: pure signal helpers (`predicate_signals`,
+  `period_relation` — equal/same_year/contains/overlaps/adjacent/disjoint/
+  unknown/missing, `scope_relation` + conflict keys, `content_tokens`);
+  `signals.compute` over synthetic eligible facts (numeric equivalence,
+  currency mismatch blocking `unit_equivalent`, %-vs-absolute, scope conflict,
+  mixed modality, adjacent periods, unresolved entity, missing context,
+  publication gap + vintage); retrieval — same entity/predicate retrieved, same
+  entity + different period retrieved (period is a signal, not an exclusion),
+  same entity + related predicate ("employees"↔"headcount") retrieved on the
+  entity block, unrelated entities not retrieved, no self-pairs, canonical
+  `(min,max)` dedupe, cross-document, byte-identical re-run, `#pairs ≤ top_k ·
+  n_eligible` and `FKL_RETRIEVAL_TOP_K` changes output, empty/single-fact input,
+  only `ELIGIBLE_FOR_REASONING` facts participate, Phase 8 mutates no lifecycle
+  and writes no relationship, a C1-shape pair retrieved **without** a category,
+  `retrieval_summary`, a corpus-string grep, a real starter-PDF cross-document
+  smoke. **No LLM, no API key, no new dependency, schema unchanged.**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -208,9 +238,9 @@ name. Key groups:
 |---|---|
 | storage | `FKL_DATABASE_PATH`, `FKL_UPLOADS_DIR` |
 | LLM | `FKL_LLM_MODEL`, `FKL_LLM_TEMPERATURE`, `ANTHROPIC_API_KEY` |
-| embeddings | `FKL_EMBEDDING_MODEL`, `FKL_EMBEDDING_DIM` |
+| embeddings (reserved — retrieval rung deferred) | `FKL_EMBEDDING_MODEL`, `FKL_EMBEDDING_DIM` |
 | entity resolution | `FKL_ENTITY_LEGAL_SUFFIXES`, `FKL_ENTITY_PERSON_HONORIFICS`, `FKL_ENTITY_ANAPHORA`, `FKL_ENTITY_RENAME_PREDICATES`, `FKL_ENTITY_BLOCK_FUZZY_THRESHOLD`, `FKL_ENTITY_MERGE_FUZZY_THRESHOLD` |
-| retrieval (tuned by the eval harness) | `FKL_RETRIEVAL_TOP_K`, `FKL_RETRIEVAL_CANDIDATE_THRESHOLD`, `FKL_RETRIEVAL_WEIGHT_*` |
+| retrieval (Phase 8; tuned by the eval harness) | `FKL_RETRIEVAL_TOP_K`, `FKL_RETRIEVAL_CANDIDATE_THRESHOLD`, `FKL_PREDICATE_SIMILARITY_THRESHOLD`, `FKL_RETRIEVAL_WEIGHT_ENTITY`, `FKL_RETRIEVAL_WEIGHT_PREDICATE`, `FKL_RETRIEVAL_WEIGHT_BM25`, `FKL_RETRIEVAL_WEIGHT_EMBEDDING` (reserved), `FKL_RETRIEVAL_MIN_SHARED_TOKENS`, `FKL_RETRIEVAL_BUCKET_MAX` |
 | numeric comparison | `FKL_NUMERIC_EQUIVALENCE_TOLERANCE`, `FKL_NUMERIC_CONTRADICTION_THRESHOLD` |
 | ingestion | `FKL_MAX_UPLOAD_MB`, `FKL_MAX_PAGES`, `FKL_OCR_MIN_CHARS`, `FKL_CHUNK_TARGET_CHARS`, `FKL_CHUNK_OVERLAP_CHARS` |
 
@@ -231,9 +261,11 @@ app/
   verify.py     # Phase 5 — deterministic evidence verification (verify_document, verify_fact)
   normalize.py  # Phase 6 — deterministic numeric/date/unit/period normalization (normalize_document)
   entities.py   # Phase 7 — entity resolution (resolve_document, resolution_summary)
+  retrieve.py   # Phase 8 — bounded candidate-pair retrieval (retrieve_candidates, retrieval_summary)
+  signals.py    # Phase 8 — deterministic comparison signals (signals.compute)
   prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md)
-scripts/        # smoke_extract.py — live extraction smoke test (needs ANTHROPIC_API_KEY)
-tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities (+ conftest, fakes)
+scripts/        # smoke_extract.py, smoke_retrieve.py — offline/manual smoke tests
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

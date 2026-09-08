@@ -83,6 +83,59 @@ publication gap) with a **constrained** LLM semantic step: the LLM proposes an
 interpretation, deterministic logic validates it against those signals and has
 the final say. Not implemented yet.
 
+## Candidate retrieval — lexical baseline, broad by design (Phase 8, done)
+
+`app/retrieve.py` + `app/signals.py` generate candidate pairs and deterministic
+comparison signals. It is **read-only** and does **no** relationship
+classification. Known risks, each an accepted position for this phase:
+
+- **Lexical-only retrieval — false negatives.** Predicate matching is
+  `rapidfuzz.token_set_ratio` + token overlap. Two facts that are the same
+  measure but share no tokens after normalization ("employees" vs "headcount",
+  "CAD" vs "current account deficit") are retrieved **only** when they also share
+  a resolved `subject_entity_id` (the entity block) or ≥ N shared content tokens.
+  A cross-entity synonym pair with neither is **missed**. The fix is the deferred
+  embedding rung (below); until then the entity block is the safety net and the
+  eval harness (Phase 10) is where the gap gets measured.
+- **Broad entity blocking — false positives.** Every pair of eligible facts about
+  the same entity is a candidate, so a busy entity produces many pairs that are
+  not meaningfully comparable (revenue vs an unrelated count). This is
+  deliberate — "high recall first, precision later" — and bounded by
+  `FKL_RETRIEVAL_TOP_K` (`#pairs ≤ top_k · n_eligible`). Phase 9 + the
+  `SignalSet` (low `predicate_similarity`, `fact_type` mismatch, `unit`
+  mismatch) are what filter them; Phase 10 tunes `top_k` /
+  `candidate_threshold` against expected-property specs.
+- **Context mismatch is a signal, not a filter.** FY24-vs-FY25 revenue,
+  global-vs-India scope, actual-vs-forecast — all retrieved, with
+  `period_relation` / `scope_conflict` / `modality_comparable` set. If Phase 9
+  under-uses those signals it could mislabel a reconciliation case; that risk
+  lives in Phase 9, not here.
+- **Embeddings deferred.** `fastembed` / `numpy` are not installed and the brief
+  forbids forcing embeddings. `facts.embedding` stays NULL, `app/embed.py` is not
+  created, `retrieval_weight_embedding` is a reserved knob. **Lexical predicate
+  similarity is the current deterministic baseline; semantic embeddings are a
+  future improvement** — a `name+context cosine` block would add the missing
+  cross-entity synonym recall and let `retrieval_weight_embedding` become live.
+  Risks a future embedding rung must watch: a local ONNX model download at first
+  use (offline-friendly but not zero-setup), non-reproducible vectors across
+  model versions (store `embedding_model` + `embedding_dim`), and treating a high
+  cosine as proof of equivalence (it never is — it only widens the candidate
+  set).
+- **Quadratic scaling.** Retrieval is near-linear in the *output* size via an
+  inverted index, not a full O(n²) DB scan, and oversized non-discriminative
+  token buckets are dropped (`FKL_RETRIEVAL_BUCKET_MAX`). At the corpus scale
+  here (hundreds–thousands of eligible facts) this is microseconds. Beyond ~1e4
+  eligible facts, swap the inverted index for an ANN index — the
+  `retrieve_candidates` signature hides the change.
+- **Dependencies / API.** No new dependency, no network, no API key. `rapidfuzz`
+  was already present from Phase 5.
+- **Deterministic real-corpus smoke only.** As in Phases 4–7, meaningful
+  end-to-end validation needs `ANTHROPIC_API_KEY` for extraction. The Phase-8
+  smoke (`scripts/smoke_retrieve.py`, and a scratchpad LLM-free harvest) proves
+  retrieval is **bounded, blocked, cross-document and byte-identical on re-run**
+  over real ingested page text; it does not prove the *usefulness* of the
+  candidate set, which depends on real extracted facts.
+
 ## Entity resolution — heuristics with a bias to *not* merge
 
 **Phase 7 (done)** resolves subject surfaces with generic config only (legal

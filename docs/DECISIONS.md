@@ -288,3 +288,56 @@ prototype. Matches the stack the reviewer specified.
 A3 report); `pdftotext` shell-out (loses geometry, adds a subprocess).
 **Revisit when:** table-heavy pages (RBI appendix) need real structure — add a
 layout/table extractor before chunking; the evidence model already allows bbox.
+
+## D22 — Phase 8 retrieval: high recall first, lexical baseline, signals not scores
+
+**Decision:** candidate retrieval (`app/retrieve.py`) is a two-stage,
+**read-only**, deterministic pass over `ELIGIBLE_FOR_REASONING` facts. Stage A
+blocks on shared structure (resolved entity, exact normalized predicate, ≥ N
+shared content tokens) via an inverted index, ranks with an explicit
+config-weighted `retrieval_score`, and keeps the top `FKL_RETRIEVAL_TOP_K` per
+fact. Stage B (`app/signals.py`) attaches a full `SignalSet` of explicit
+comparison signals. Candidate pairs are **returned, not persisted** — no
+candidate-pair table, no migration.
+**Why:**
+- *High recall first, precision later.* A retrieved pair is only a *candidate for
+  downstream reasoning*; Phase 9 decides `CORROBORATES` / `CONTRADICTS` / etc.
+  Retrieval must not drop a pair just because periods, scope, currency, or
+  modality differ — those differences are exactly what Phase 9 reconciles, so
+  they are emitted as **signals**, never used as retrieval exclusions.
+- *No relationship classification in Phase 8.* `CandidatePair` has no `category`
+  field. `relationships` is untouched.
+- *Explicit signals, not one opaque number.* Every signal
+  (`period_relation`, `scope_conflict`, `unit_equivalent`,
+  `base_value_delta_pct`, `modality_comparable`, `publication_gap_days`, …) is a
+  named, inspectable field on `SignalSet`. `retrieval_score` is a documented
+  weighted formula over `Settings` values — not a truth score, not a
+  contradiction score.
+- *Transient pairs.* Persisting a candidate-pair table would add a migration and
+  a second place lifecycle state could leak. Deterministic recomputation gives
+  "re-run adds no pairs" for free, and Phase 9 can persist what it keeps.
+**Embedding decision — deferred (again).** The planned `name+context cosine` rung
+and `app/embed.py` (deferred from Phase 7 to Phase 8) are **still deferred**:
+`fastembed` / `numpy` are not installed in this environment, and the brief is
+explicit that embeddings must not be forced when the environment can't support a
+robust local implementation. `facts.embedding` / `facts.predicate_embedding`
+stay NULL; `retrieval_weight_embedding` stays in `Settings` as a reserved knob.
+The deterministic path (entity block + `rapidfuzz` predicate similarity + token
+overlap) covers the acceptance set — the same-entity block retrieves synonym
+predicates ("employees" ↔ "headcount") with zero shared tokens. Lexical-only
+retrieval of true synonyms across *different* entities is the known gap; adding
+the embedding rung is the documented next enhancement (see RISKS).
+**Candidate ranking.**
+`retrieval_score = (w_entity·[same entity] + w_predicate·predicate_sim +
+w_bm25·lexical_overlap) / (w_entity + w_predicate + w_bm25)`. Entity and
+exact-predicate pairs bypass `FKL_RETRIEVAL_CANDIDATE_THRESHOLD` (they are strong
+structural candidates); everything else must clear it. `FKL_RETRIEVAL_TOP_K` is
+the final bound, so `#pairs ≤ top_k · n_eligible` always holds. All weights and
+thresholds are `Settings` fields (D19) — Phase 10's harness tunes them.
+**Rejected:** an embedding-only or single-score retriever (opaque, and no local
+model here); persisting candidate pairs (migration + lifecycle surface for no
+Phase-8 benefit); letting a context mismatch prune a pair (destroys the
+reconciliation cases); classifying relationships in retrieval (that is Phase 9).
+**Revisit when:** the eligible set outgrows ~1e4 facts (swap the inverted index
+for an ANN index — `retrieve_candidates` return type hides it), or Phase 10
+shows lexical recall missing cross-entity synonym pairs (add the embedding rung).
