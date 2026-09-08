@@ -48,13 +48,6 @@ def start(conn: sqlite3.Connection, document_id: int, *,
     return run_id
 
 
-def running_full_run(conn: sqlite3.Connection, document_id: int) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM runs WHERE document_id = ? AND run_type = 'full' AND status = 'running' "
-        "ORDER BY id DESC LIMIT 1", (document_id,),
-    ).fetchone()
-
-
 def _aggregate(conn: sqlite3.Connection, document_id: int, run_id: int, stage: str) -> None:
     row = conn.execute(
         "SELECT "

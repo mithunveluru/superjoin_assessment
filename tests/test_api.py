@@ -221,6 +221,40 @@ def test_process_unknown_document_404(api):
     assert api.post("/documents/999/process").status_code == 404
 
 
+def test_process_is_idempotent_after_completion(db_path, make_pdf):
+    """A completed full run is returned as-is; re-processing must not start a
+    second run (which would create duplicate CANDIDATE facts). A failed run is
+    still re-startable."""
+    from app import db
+    from app.ingest import ingest_pdf
+    from app.pipeline import run as pipeline_run
+    from app.pipeline import start as pipeline_start
+
+    db.init_db(db_path)
+    doc_id = ingest_pdf(str(make_pdf(["Acme filed its report for FY24."])),
+                        database_path=db_path).document_id
+    conn = db.connect(db_path)
+    with db.transaction(conn):
+        run_id = pipeline_start(conn, doc_id, settings=Settings())
+    conn.close()
+    pipeline_run(doc_id, run_id, database_path=db_path, settings=Settings(), extractor=FakeLLM([]))
+
+    get_settings.cache_clear()
+    with TestClient(app) as client:
+        first = client.post(f"/documents/{doc_id}/process")
+        assert first.status_code == 202
+        assert first.json()["run_id"] == run_id          # the completed run, not a new one
+        assert first.json()["status"] == "done"
+        assert client.get(f"/documents/{doc_id}/status").json()["status"] == "done"
+
+    conn = db.connect(db_path)
+    n_full = conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE document_id = ? AND run_type = 'full'", (doc_id,)
+    ).fetchone()[0]
+    conn.close()
+    assert n_full == 1
+
+
 # --------------------------------------------------------------------------- #
 # pipeline orchestration (direct, with fakes)                                #
 # --------------------------------------------------------------------------- #

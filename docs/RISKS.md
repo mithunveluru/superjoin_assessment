@@ -271,6 +271,25 @@ positions and residual risks:
   keep their Phase-0 starting values. Real tuning needs both corpora processed
   with a key; the Phase-10 sweep mechanism is ready for it.
 
+## Submission hardening (Phase 14, done)
+
+- **Re-processing was not idempotent.** `POST /documents/{id}/process` on an
+  already-completed document re-ran extraction, creating a duplicate set of
+  `CANDIDATE` facts (`extract_document` does not dedup against existing facts).
+  Fixed at the API layer: a `running` or `done` full run is now returned as-is; a
+  `failed` run stays re-startable. A batch re-extraction workflow (delete + rerun,
+  or an extract-level upsert) is deferred — not needed for the single-document
+  demo flow.
+- **Single-writer concurrency.** WAL allows concurrent reads; a long
+  `BackgroundTask` holds write locks and `busy_timeout` covers brief contention.
+  A second concurrent `POST /process` for the same document returns the running
+  run. No request-level locking beyond that; a worker/queue is the scale path.
+- **No auth, no rate limiting, no upload virus scan.** Local prototype only —
+  stated in the README. Upload is bounded by `FKL_MAX_UPLOAD_MB` /
+  `FKL_MAX_PAGES` / `FKL_MAX_CHUNKS_PER_DOC` and a per-document LLM-call cap
+  (`FKL_MAX_LLM_CALLS_PER_DOC`); error responses carry a `code`/`message`, not a
+  stack trace or a filesystem path.
+
 ## Candidate retrieval — lexical baseline, broad by design (Phase 8, done)
 
 `app/retrieve.py` + `app/signals.py` generate candidate pairs and deterministic

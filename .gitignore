@@ -1,5 +1,7 @@
 # secrets & local data
 .env
+.env.*
+!.env.example
 data/
 uploads/
 
@@ -22,6 +24,10 @@ venv/
 *.egg-info/
 build/
 dist/
+
+# node (only used ad-hoc for a headless jsdom UI check — never a repo dependency)
+node_modules/
+package-lock.json
 
 # tooling caches
 .pytest_cache/

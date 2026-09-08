@@ -50,8 +50,9 @@ class _Seeder:
 
     def fact(self, doc: int, *, entity: int, predicate: str, obj: str, quote: str,
              base_value: float | None = None, currency: str = "INR",
-             period: tuple[str, str] | None = None, scope: dict | None = None,
-             modality: str = "HISTORICAL", eligible: bool = True) -> int:
+             period: tuple[str, str] | None = None, period_raw: str | None = None,
+             scope: dict | None = None, modality: str = "HISTORICAL",
+             eligible: bool = True) -> int:
         idx = self._page.get(doc, 0)
         self._page[doc] = idx + 1
         text = f"{quote}  (synthetic evaluation page {idx})"
@@ -68,6 +69,7 @@ class _Seeder:
             predicate_norm=predicate.lower(), object_raw=obj, fact_type="numeric",
             value_raw=obj, numeric_value=base_value, base_value=base_value,
             currency=currency, subject_entity_id=entity, modality=modality, scope=scope,
+            reporting_period_raw=period_raw,
             reporting_period_start=period[0] if period else None,
             reporting_period_end=period[1] if period else None,
             reporting_period_type="fiscal_year" if period else None,
@@ -120,31 +122,34 @@ def seed_corpus(database_path: str, *, settings: Settings | None = None,
                     obj="81,415.38 million",
                     quote="revenue from operations on a consolidated basis for FY24 stood at "
                           "INR 81,415.38 million",
-                    base_value=8.141538e10, period=_FY24, scope={"basis": "consolidated"},
-                    eligible=elig)
+                    base_value=8.141538e10, period=_FY24, period_raw="FY24",
+                    scope={"basis": "consolidated"}, eligible=elig)
         f2 = s.fact(doc_a, entity=acme, predicate="revenue from operations",
                     obj="74,540.82 million",
                     quote="revenue from operations on a standalone basis for FY24 stood at "
                           "INR 74,540.82 million",
-                    base_value=7.454082e10, period=_FY24, scope={"basis": "standalone"})
+                    base_value=7.454082e10, period=_FY24, period_raw="FY24",
+                    scope={"basis": "standalone"})
         f3 = s.fact(doc_a, entity=acme, predicate="revenue from operations",
                     obj="60,000.00 million",
                     quote="revenue from operations on a consolidated basis for FY23 stood at "
                           "INR 60,000.00 million",
-                    base_value=6.0e10, period=_FY23, scope={"basis": "consolidated"})
+                    base_value=6.0e10, period=_FY23, period_raw="FY23",
+                    scope={"basis": "consolidated"})
         f4 = s.fact(doc_a, entity=acme, predicate="profit after tax", obj="5,000.00 million",
                     quote="profit after tax for FY24 was INR 5,000.00 million",
-                    base_value=5.0e9, period=_FY24)
+                    base_value=5.0e9, period=_FY24, period_raw="FY24")
         f5 = s.fact(doc_a, entity=acme, predicate="profit after tax", obj="8,000.00 million",
                     quote="profit after tax for FY24 was INR 8,000.00 million",
-                    base_value=8.0e9, period=_FY24)
+                    base_value=8.0e9, period=_FY24, period_raw="FY24")
         f6 = s.quarantined(doc_a, predicate="permanent employees", obj="99,999",
                            reason="quote_not_found in source text")
 
         deck_value = 5.0e10 if fabricate_corroboration else 8.142e10
         f7 = s.fact(doc_b, entity=acme, predicate="revenue from services", obj="8,142 Cr",
                     quote="FY24 revenue from services was INR 8,142 Cr", base_value=deck_value,
-                    period=_FY24, scope={"basis": "consolidated"}, eligible=elig)
+                    period=_FY24, period_raw="FY24", scope={"basis": "consolidated"},
+                    eligible=elig)
         conn.commit()
     finally:
         conn.close()

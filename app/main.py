@@ -160,8 +160,11 @@ def process_document(document_id: int, background_tasks: BackgroundTasks,
                      conn: Conn):
     if conn.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,)).fetchone() is None:
         raise APIError(404, "document_not_found", f"no document {document_id}")
-    existing = pipeline.running_full_run(conn, document_id)
-    if existing:
+    # idempotent: a running OR already-completed full run is returned as-is —
+    # re-processing would create a second set of CANDIDATE facts. A failed run
+    # (or no run) is (re)startable.
+    existing = queries.latest_run(conn, document_id, "full")
+    if existing and existing["status"] in ("running", "done"):
         return ProcessOut(run_id=existing["id"], document_id=document_id,
                           status=existing["status"], stage=existing["stage"],
                           started_at=existing["started_at"])

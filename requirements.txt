@@ -1,5 +1,6 @@
-# Dependencies added per phase. Later phases append their own
-# (anthropic, fastembed, rapidfuzz, numpy; OCR libs only if a later phase needs them).
+# Runtime + dev dependencies, grouped by the phase that first needed them.
+# Deliberately small: no vector DB, no ORM, no embedding model, no OCR libs
+# (all considered and deferred — see docs/DECISIONS.md and docs/RISKS.md).
 fastapi>=0.115
 uvicorn[standard]>=0.30
 pydantic>=2.7

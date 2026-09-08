@@ -10,25 +10,26 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 ✅ · Phase 10 ✅ · Phase 11 ✅ · Phase 12 ✅ · Phase 13 ✅ · Phase 14 not started.
+**Status:** all 15 phases (0–14) ✅ complete. Repository is submission-ready.
+391 pytest tests pass, ruff clean.
 
-| Phase | Title |
-|---|---|
-| 0 | Architecture / design — ✅ |
-| 1 | Foundation + configuration + SQLite schema + tests — ✅ |
-| 2 | PDF ingestion + page‑preserving extraction — ✅ |
-| 3 | Fact / evidence model + persistence — ✅ |
-| 4 | Candidate fact extraction — ✅ |
-| 5 | Evidence verification + quarantine — ✅ |
-| 6 | Context + numeric / date / unit normalization — ✅ |
-| 7 | Entity resolution — ✅ |
-| 8 | Candidate retrieval + deterministic signals |
-| 9 | Relationship reasoning + explanations |
-| 10 | Evaluation harness |
-| 11 | API |
-| 12 | UI |
-| 13 | Full dataset evaluation |
-| 14 | Hardening + README + demo |
+| Phase | Title | |
+|---|---|---|
+| 0 | Architecture / design | ✅ |
+| 1 | Foundation + configuration + SQLite schema + tests | ✅ |
+| 2 | PDF ingestion + page‑preserving extraction | ✅ |
+| 3 | Fact / evidence model + persistence | ✅ |
+| 4 | Candidate fact extraction | ✅ |
+| 5 | Evidence verification + quarantine | ✅ |
+| 6 | Context + numeric / date / unit normalization | ✅ |
+| 7 | Entity resolution | ✅ |
+| 8 | Candidate retrieval + deterministic signals | ✅ |
+| 9 | Relationship reasoning + explanations | ✅ |
+| 10 | Evaluation harness | ✅ |
+| 11 | API | ✅ |
+| 12 | UI | ✅ |
+| 13 | Full end-to-end validation + demo prep | ✅ |
+| 14 | Submission hardening + README + demo | ✅ |
 
 ## Stack (locked)
 
@@ -911,19 +912,79 @@ scripted; a live corpus run is the one item gated on an API key.
 
 ---
 
-## PHASE 14 — Hardening, README, demo
+## PHASE 14 — Submission hardening + README + demo  ✅ COMPLETE
 
-**Objective:** ship. Full README (Setup and Run Instructions, Video Demo,
-Approach, Limitations and Next Steps, Additional Notes; name the AI tools used);
-commit `samples/` (exported `GET /facts` + `/relationships` JSON + screenshots
-for key‑less review); security pass (no secret in `git log -p`, upload limits,
-error paths don't leak paths); resource pass (`max_llm_calls`, `max_chunks`,
-timeouts, cost estimate sane); record the ≤3‑min demo; `ruff` clean; non‑`llm`
-`pytest` green from a clean clone.
-**Acceptance:** fresh clone → follow README → app runs → unseen PDF → facts +
-relationships appear; demo ≤3:00 shows all four cases + a failure; submission
-checklist (assignment "Before You Submit") all ticked.
-**Gate:** submission‑ready.
+**Objective:** make the repo submission-ready, reproducible, and honest. No
+architecture change.
+
+**Files shipped:** a rewritten **`README.md`** (23 sections: problem, what it
+does, architecture, fact representation, evidence/provenance, lifecycle,
+relationship reasoning, deterministic-vs-LLM split, API, UI, setup, env vars,
+run, process a PDF, test, lint, demo, the four scenarios, limitations, future
+work, reproducibility, LLM/key requirements); **`docs/DEMO.md`** (a ≤ 3-minute
+walkthrough tied to real functionality, with the synthetic fixture clearly
+labelled); `.gitignore` (`.env.*` + `!​.env.example`, `node_modules/`),
+`.env.example` + `requirements.txt` comment fixes, `docs/RISKS.md` +
+`docs/IMPLEMENTATION_PLAN.md` updates.
+
+**One genuine defect found and fixed.** `POST /documents/{id}/process` re-ran the
+full pipeline on an already-completed document, which would create a **second set
+of `CANDIDATE` facts** (`extract_document` does not dedup against existing
+facts). Fix: `process_document` now returns the existing full run when it is
+`running` **or** `done` (a `failed` run stays re-startable). Small, generic,
+API-layer only; the orphaned `pipeline.running_full_run` helper was removed.
+Regression test: `tests/test_api.py::test_process_is_idempotent_after_completion`.
+
+**Assignment compliance audit** (against the real implementation):
+
+| # | Requirement | Status |
+|---|---|---|
+| A | PDF ingestion | PASS — `app/ingest.py`, real Delhivery corpus ingested |
+| B | meaningful numeric/semantic fact extraction | PASS (code + contract) / PARTIAL on the real corpus (no key: extraction not run live) |
+| C | source evidence on every fact | PASS — one `evidence` row per fact from `GROUNDED` on |
+| D | evidence → page/chunk/document traceability | PASS — `evidence_chain()` + DB `CHECK`s; e2e-verified |
+| E | verification / grounding | PASS — `app/verify.py`, 4-rung ladder, deterministic |
+| F | quarantine / failure handling | PASS — `QUARANTINED` + `failures`, isolated from reasoning, shown in UI |
+| G | normalization | PASS — `app/normalize.py`, worked-table tests, raw never overwritten |
+| H | entity resolution | PASS — generic rules + borderline LLM confirm; no alias list |
+| I | candidate retrieval | PASS — `app/retrieve.py`, bounded, deterministic, cross-document |
+| J | corroboration detection | PASS — `CORROBORATES` via `deterministic_verdict` |
+| K | contradiction detection | PASS (code + synthetic fixture) — no *natural* Delhivery contradiction claimed |
+| L | contextual reconciliation | PASS — `DIFFERENT_CONTEXT` with a `context_dimension` |
+| M | temporal evolution | PASS — `TEMPORAL_EVOLUTION` from period + modality |
+| N | uncertainty handling | PASS — `UNCERTAIN` is the aggressive default; 8/15 pairs in the fixture |
+| O | API | PASS — every `API_DESIGN.md` endpoint, common error body, `/docs` |
+| P | UI | PASS — five views, no console errors, no framework/build |
+| Q | generalization beyond the provided PDFs | PASS — synthetic PDFs + fixtures throughout; `--corpus` accepts any dir |
+| R | no corpus-specific hardcoding | PASS — `grep -rniE 'delhivery|rbi|…' app/ evaluation/` is clean; enforced by tests |
+| S | reproducibility | PASS — deterministic components byte-identical on re-run; `seed_demo.py`; versioned prompts + run metadata |
+| T | documentation | PASS — 9 docs + README + DEMO |
+| U | demo readiness | PASS — `seed_demo.py` + `docs/DEMO.md`; a live-key run is the one gated item |
+
+**Secret / hygiene audit.** `git ls-files` carries no `.env`, no `*.db`, no
+credentials; `git grep` for secret patterns (`sk-ant-`, `AIza…`, PEM headers,
+`xox…`, `ghp_…`) over tracked files is empty. `.env` is git-ignored and holds
+only a local **unrelated** non-Anthropic key that the app never reads (only
+`ANTHROPIC_API_KEY` + `FKL_*`). `.env.example` is placeholders only. `.gitignore`
+covers `data/`, `uploads/`, `*.db*`, `.venv/`, caches, `node_modules/`,
+`.env`/`.env.*` (except `.env.example`).
+
+**Real LLM validation:** **not performed** — no legitimate `ANTHROPIC_API_KEY`
+available. Not substituted, not worked around; the documented limitation stands.
+
+**Final testing.** `391 passed` (390 → +1 regression test), ruff clean,
+`node --check app/static/app.js` OK, headless jsdom UI drive against live
+`uvicorn` + the seeded demo DB (all five views + a fact and a relationship
+expansion — no console errors, no server exceptions), fresh-DB init → `user_version
+3`, `foreign_key_check` clean, `seed_demo.py` deterministic.
+**Gate:** submission-ready. **Met.**
+
+## PHASE 14 (original plan text)
+
+*Objective:* ship — README, demo, security pass, resource pass, clean-clone
+`pytest`. `samples/` (exported JSON + screenshots for key-less review) was folded
+into `scripts/seed_demo.py` + `docs/DEMO.md` — a reproducible command is better
+than committed artifacts. Video recording is a submission step outside the repo.
 
 ---
 
