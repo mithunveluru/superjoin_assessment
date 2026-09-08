@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__, db, pipeline, queries
@@ -67,7 +67,9 @@ async def _api_error_handler(_: Request, exc: APIError) -> JSONResponse:
 
 
 def get_conn() -> Iterator[sqlite3.Connection]:
-    conn = db.connect()
+    # check_same_thread=False: Starlette may run this generator's teardown on a
+    # different threadpool thread than its setup. One request, used sequentially.
+    conn = db.connect(check_same_thread=False)
     try:
         yield conn
     finally:
@@ -259,7 +261,7 @@ def list_failures(conn: Conn, document_id: int | None = None,
 
 
 # --------------------------------------------------------------------------- #
-# static UI (Phase 12 drops files into app/static/; absent for now)          #
+# static UI (Phase 12 — framework-free single page over the API)             #
 # --------------------------------------------------------------------------- #
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
@@ -269,6 +271,6 @@ if STATIC_DIR.is_dir():
 def root():
     index = STATIC_DIR / "index.html"
     if index.is_file():
-        return JSONResponse({"ui": "/static/index.html", "docs": "/docs"})
+        return FileResponse(index)
     return JSONResponse({"service": "fact-knowledge-layer", "version": __version__,
                          "docs": "/docs"})

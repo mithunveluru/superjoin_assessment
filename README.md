@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–11 of 15 complete; Phase 12 not started.** This repo contains
+> **Status: Phases 1–12 of 15 complete; Phase 13 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -118,8 +118,15 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > the failure surface — each with the documented filter matrix, `?limit`/`?offset`
 > pagination, and a common `{"error": {code, message}}` body. `uvicorn
 > app.main:app` boots the app with `/docs` (OpenAPI); a full run through HTTP
-> needs `ANTHROPIC_API_KEY` for extraction. The **static UI** (Phase 12) is next,
-> see [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate
+> needs `ANTHROPIC_API_KEY` for extraction. A **static, framework-free UI**
+> (`app/static/{index.html, style.css, app.js}`, ~400 lines of vanilla JS, no
+> build step) is served at `/`: five views (Documents with upload + 2-second
+> status polling, Facts with the filter matrix and expandable rows showing the
+> quote + verification detail + context window, Relationships with category tabs
+> and cards showing Fact A | Fact B + the deterministic-signals table +
+> LLM-proposed-vs-final category + reasoning, Failures, Entities). The
+> **full-dataset evaluation** (Phase 13) is next, see
+> [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate
 > design positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
 ## Design docs
@@ -160,8 +167,9 @@ uvicorn app.main:app --reload
 ```
 
 On startup the app creates `data/knowledge.db` from `app/schema.sql` (the genesis
-schema) and applies any pending migrations from `app/db.py`. Interactive API docs
-are at `http://localhost:8000/docs`. Check it:
+schema) and applies any pending migrations from `app/db.py`. The **UI** is at
+`http://localhost:8000/` (upload → process → inspect facts, relationships, and
+failures); interactive API docs are at `http://localhost:8000/docs`. Check it:
 
 ```bash
 curl -s localhost:8000/health | python -m json.tool
@@ -330,6 +338,13 @@ pytest
   `run.error` at HTTP 200; `pipeline.run` reaching `done` with an empty fake
   extractor and `failed@extract` with a raising one. **Fakes only — no API calls.
   New dep: `python-multipart`. Schema unchanged (`user_version` 3).**
+- **Phase 12** covers: `GET /` serves `index.html`; `/static/app.js` and
+  `/static/style.css` are served with the right content types; every path
+  `app.js` calls resolves to a real route in the OpenAPI schema; `node --check`
+  parses `app.js`; `app/static/` holds exactly the three files (no build step).
+  The render paths were verified once headless (jsdom driving all five views + a
+  fact and a relationship expansion against a live seeded API — no console or
+  server errors); that check is not in the suite. **No dependency, no migration.**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -374,11 +389,12 @@ app/
   reason.py     # Phase 9 — relationship reasoning (reason_document, reason_pair, deterministic_verdict)
   pipeline.py   # Phase 11 — full-document orchestration (start + run, BackgroundTask)
   queries.py    # Phase 11 — read/shaping layer for the API (no writes, no LLM)
-  main.py       # Phase 1 /health + Phase 11 REST API over the storage
+  main.py       # Phase 1 /health + Phase 11 REST API + Phase 12 UI (GET /, /static)
+  static/       # Phase 12 — index.html, style.css, app.js (vanilla, no build step)
   prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md, relationship_v1.md)
 evaluation/     # Phase 10 — harness.py (CLI), properties.py, corpora/synthetic.py, cases/**/*.json
 scripts/        # smoke_extract.py, smoke_retrieve.py, smoke_reason.py — offline/manual smoke tests
-tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason, eval_harness, api (+ conftest, fakes)
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason, eval_harness, api, ui (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

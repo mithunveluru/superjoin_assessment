@@ -41,12 +41,19 @@ def _resolve_path(database_path: str | Path | None) -> Path:
     return Path(database_path) if database_path is not None else get_settings().database_path
 
 
-def connect(database_path: str | Path | None = None) -> sqlite3.Connection:
-    """Open a connection with the pragmas this app relies on. Caller closes it."""
+def connect(database_path: str | Path | None = None, *,
+            check_same_thread: bool = True) -> sqlite3.Connection:
+    """Open a connection with the pragmas this app relies on. Caller closes it.
+
+    ``check_same_thread=False`` is for the FastAPI request-scoped connection only:
+    Starlette may run a sync dependency's teardown (``conn.close()``) on a
+    different threadpool thread than its setup. The connection is still used by
+    exactly one request, sequentially — never shared concurrently.
+    """
     path = _resolve_path(database_path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")

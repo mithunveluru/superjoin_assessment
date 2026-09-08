@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 ✅ · Phase 10 ✅ · Phase 11 ✅ · Phase 12 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 ✅ · Phase 10 ✅ · Phase 11 ✅ · Phase 12 ✅ · Phase 13 not started.
 
 | Phase | Title |
 |---|---|
@@ -766,18 +766,58 @@ Phases 4-10; the pipeline path is wired and unit-tested with fakes.
 
 ---
 
-## PHASE 12 — UI
+## PHASE 12 — UI  ✅ COMPLETE
 
-**Objective:** static, framework‑free UI over the API. Views: Documents
-(upload/status), Facts (filters, expandable rows with quote + doc/page + full
-context + verification detail), Relationships (category tabs; card shows Fact A |
-Fact B, the deterministic signals table, **LLM‑proposed vs final category +
-validation note**, reasoning, evidence both sides), Failures (all failure rows
-with reasons). ~150 lines CSS, system font, no build step.
-**Acceptance:** a reviewer with no terminal can upload → watch processing → open
-a relationship and see both evidences, the signals, and why the category was
-chosen (incl. any override). No console errors.
-**Gate:** the four demo cases visible in the UI with no hard‑coded examples.
+**Objective:** static, framework‑free UI over the Phase‑11 API. No build step,
+no framework, no dependency.
+**Files shipped:** `app/static/index.html` (nav + `<main>` + footer, ~20 lines),
+`app/static/style.css` (~160 lines, system font, CSS variables, tables + cards +
+badges), `app/static/app.js` (~400 lines vanilla — `el()` DOM helper, `api()`
+fetch wrapper that raises the `{error:{code,message}}` body, a hash router over
+five views), `app/main.py` (`GET /` now serves the page via `FileResponse`;
+`/static/*` mounted), `app/db.py` (`connect(check_same_thread=…)` — see fix),
+`tests/test_ui.py` (5 tests).
+**Views.**
+- *Documents* — `<input type=file>` → `POST /documents`; a table row per document
+  with status badge + `counts`; a **Process** button → `POST /documents/{id}/
+  process` then polls `GET /documents/{id}/status` every 2 s, showing the stage
+  and, on failure, the error, then refreshing.
+- *Facts* — a filter bar (search/FTS `q`, doc id, `lifecycle_state`,
+  `evidence_status`, `modality`, `type`, `reasoning_eligible`) + `?limit/offset`
+  pager; each row expands (`GET /facts/{id}`) to the verbatim quote, the numeric
+  representation, reporting period, scope, modality, the **verification detail**
+  (`verification_method` / `numeric_rederivation` / notes / char range), the
+  ±200‑char context window, and links to the fact's relationships.
+- *Relationships* — category tabs (All + the five categories) over
+  `GET /relationships`; each card shows the `category_label` badge, confidence,
+  and **Fact A | Fact B** (claim + quote + doc/page); expanding
+  (`GET /relationships/{id}`) shows the full deterministic‑signals table, then
+  **LLM‑proposed → final category (validation_action)** + `validation_notes`,
+  the reasoning sentence, and both evidences with their context windows.
+- *Failures* — `GET /failures` as a table: `failure_type` badge, `reason`, ref,
+  document, and the linked QUARANTINED fact or the linked relationship.
+- *Entities* (secondary) — `GET /entities` list; each row expands to aliases
+  (with `match_method` and any `source_fact_id`) and sample facts.
+**Server fix (surfaced by the UI smoke).** Under real `uvicorn` (a threadpool),
+Starlette can run a sync dependency's teardown on a different thread than its
+setup, so `get_conn`'s `conn.close()` hit sqlite's thread check. `db.connect`
+gained an opt‑in `check_same_thread` kwarg (default `True` — every existing call
+unchanged); the API's `get_conn` passes `False` (one connection per request, used
+sequentially). Not a schema change.
+**Acceptance (met):** `uvicorn app.main:app` → open `http://localhost:8000/`;
+all five views render with **no console errors and no server exceptions**
+(verified headless with jsdom driving every route + a fact expansion + a
+relationship expansion against a live seeded API); a reviewer can upload a PDF,
+watch `processing → done|failed`, open a relationship and see both quotes, the
+signals table, and the proposed‑vs‑final category with the override note. The
+page names no entity, figure, or filename — every view is a live API read.
+`tests/test_ui.py`: `GET /` serves `index.html`; the two assets have the right
+content types; every path `app.js` calls exists in the OpenAPI schema; `node
+--check app/static/app.js` parses; `app/static/` holds exactly the three files
+(no build artifacts). 385 tests pass, ruff clean.
+**Gate:** the four demo cases are visible in the UI with no hard‑coded examples —
+the Relationships view + the Failures view render whatever the pipeline produced.
+**Met** (fully populated cases need a real processed corpus — Phase 13).
 
 ---
 

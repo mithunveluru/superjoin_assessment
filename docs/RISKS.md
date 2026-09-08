@@ -213,6 +213,33 @@ storage over FastAPI. Accepted positions and residual risks:
 - **New dependency:** `python-multipart` (the documented multipart upload) — one
   small pure-Python package. No migration; `user_version` stays 3.
 
+## Static UI — read-only over the API, no framework (Phase 12, done)
+
+`app/static/{index.html, style.css, app.js}`, served by FastAPI. Accepted
+positions and residual risks:
+
+- **No dependency, no build, no bundler.** ~400 lines of vanilla `app.js` + ~160
+  of CSS. The trade is no component model, no type checking on the client, and
+  hand-rolled DOM building. Kept small on purpose (D3).
+- **Browser-code coverage.** `pytest` pins only the servable contract (page +
+  assets served, right content types, every endpoint the JS calls exists in the
+  OpenAPI schema, `node --check` parses `app.js`, no build artifacts in
+  `app/static/`). The render paths themselves were verified once with a headless
+  jsdom run (every route + a fact/relationship expansion, zero console/server
+  errors); that run is **not** in the suite (it needs `node` + `jsdom`). A
+  regression in a render function would pass `pytest`.
+- **Polling, not streaming.** The Documents view polls
+  `GET /documents/{id}/status` every 2 s after a Process click. Fine for one
+  reviewer; many concurrent processes would each poll.
+- **No client-side error surface beyond an inline box.** A failed `fetch` renders
+  the `{error:{code,message}}` body in place; there is no toast, retry, or
+  offline handling.
+- **Thread-affinity fix.** Serving the UI under real `uvicorn` exposed that
+  Starlette can close a sync dependency's connection on a different threadpool
+  thread. `db.connect` gained `check_same_thread` (default `True`); the API's
+  `get_conn` opts into `False`. One connection per request, never shared
+  concurrently — safe. Every non-API caller is unchanged.
+
 ## Candidate retrieval — lexical baseline, broad by design (Phase 8, done)
 
 `app/retrieve.py` + `app/signals.py` generate candidate pairs and deterministic

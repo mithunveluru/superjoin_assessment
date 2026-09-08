@@ -35,6 +35,21 @@ cards. Next.js adds a Node toolchain, a build, and a second thing to run for a
 reviewer.
 **Rejected:** Next.js / React / Vite (toolchain tax); server-side templating with
 Jinja (fine, but plain JSON+fetch is even less to own).
+**As built (Phase 12):** `app/static/{index.html, style.css (~160 lines, CSS
+vars, system font), app.js (~400 lines vanilla)}` — a hash router over five
+views (Documents / Facts / Relationships / Failures / Entities), a ~15-line
+`el()` DOM builder, an `api()` fetch wrapper that raises the
+`{error:{code,message}}` body, and 2-second polling of
+`GET /documents/{id}/status` after a Process click. `GET /` serves the page with
+`FileResponse`. No dependency, no build, no bundler. Verified headless with
+jsdom (every route + a fact/relationship expansion, zero console/server errors);
+a `pytest` test asserts every path `app.js` calls exists in the OpenAPI schema
+and that `node --check` parses the file.
+**Fix it forced:** running the UI under real `uvicorn` exposed that Starlette can
+tear down a sync connection dependency on a different threadpool thread than it
+was created on. `db.connect` got an opt-in `check_same_thread` kwarg (default
+`True`); only the API's `get_conn` passes `False`. One connection per request,
+used sequentially — no concurrent sharing.
 **Revisit when:** the UI needs real interactivity (graph exploration, bulk edit).
 The API contract already supports a richer client.
 
