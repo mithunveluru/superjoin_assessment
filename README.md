@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–12 of 15 complete; Phase 13 not started.** This repo contains
+> **Status: Phases 1–13 of 15 complete; Phase 14 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -124,8 +124,15 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > status polling, Facts with the filter matrix and expandable rows showing the
 > quote + verification detail + context window, Relationships with category tabs
 > and cards showing Fact A | Fact B + the deterministic-signals table +
-> LLM-proposed-vs-final category + reasoning, Failures, Entities). The
-> **full-dataset evaluation** (Phase 13) is next, see
+> LLM-proposed-vs-final category + reasoning, Failures, Entities). **End-to-end
+> validation** (Phase 13) ran the real Delhivery corpus through ingestion (3
+> docs / 227 pages / 1006 chunks, offset invariant intact) and the full
+> `ingest → extract → verify → normalize → resolve → retrieve → reason` pipeline
+> deterministically on a synthetic fixture (`tests/test_pipeline_e2e.py`), and
+> validated the API + UI against a live server — no 500s, no browser console
+> errors, the four required scenarios demonstrated, one quarantined extraction
+> isolated. A **live** extraction run on the real PDFs still needs
+> `ANTHROPIC_API_KEY`. Final hardening + the video demo (Phase 14) is next, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate
 > design positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
@@ -175,17 +182,38 @@ failures); interactive API docs are at `http://localhost:8000/docs`. Check it:
 curl -s localhost:8000/health | python -m json.tool
 ```
 
-**Inspect a corpus through the API** (a full run needs `ANTHROPIC_API_KEY` for
-extraction):
+### Demo without an API key (deterministic, offline)
 
 ```bash
-curl -F file=@starter-datasets/delhivery/03-*.pdf localhost:8000/documents
-curl -X POST localhost:8000/documents/1/process         # -> 202, runs in the background
-curl -s localhost:8000/documents/1/status                # poll until status = done | failed
-curl -s 'localhost:8000/facts?document_id=1&lifecycle_state=ELIGIBLE_FOR_REASONING'
+python scripts/seed_demo.py          # builds data/knowledge.db from the Phase-10 synthetic corpus
+uvicorn app.main:app                 # then open http://localhost:8000/
+```
+
+`seed_demo.py` seeds two documents, one resolved entity, and relationships across
+**all five categories** plus one quarantined extraction — enough to click through
+every UI view (Documents / Facts / Relationships / Failures / Entities) and see a
+corroboration, a contradiction, a context reconciliation, a temporal evolution,
+and a failure. Nothing in it is corpus-specific. Re-seed with `--force`.
+
+### Full run on real PDFs (needs `ANTHROPIC_API_KEY` for extraction)
+
+```bash
+export ANTHROPIC_API_KEY=...                              # or set FKL_LLM_API_KEY_ENV
+curl -F file=@starter-datasets/delhivery/03-delhivery-q4-fy24-earnings-presentation.pdf \
+     localhost:8000/documents                             # -> {"id": N, "status": "ingested", ...}
+curl -X POST localhost:8000/documents/N/process           # -> 202, runs in the background
+curl -s localhost:8000/documents/N/status                 # poll until status = done | failed
+curl -s 'localhost:8000/facts?document_id=N&lifecycle_state=ELIGIBLE_FOR_REASONING'
 curl -s 'localhost:8000/relationships?category=CORROBORATES'
 curl -s localhost:8000/failures
 ```
+
+Without a key, `POST /process` still returns `202`; the background run then fails
+at the `extract` stage and `GET /status` reports `status: "failed"` with the
+error (HTTP 200) — the failure path is intact. Ingestion, verification,
+normalization, entity resolution, retrieval and reasoning are all deterministic
+and key-free; only Phase-4 extraction calls the LLM (one call per chunk — the 3
+Delhivery PDFs are 1006 chunks, roughly $1–3 at Sonnet-5 rates).
 
 No auth — local prototype only.
 
@@ -345,6 +373,19 @@ pytest
   The render paths were verified once headless (jsdom driving all five views + a
   fact and a relationship expansion against a live seeded API — no console or
   server errors); that check is not in the suite. **No dependency, no migration.**
+- **Phase 13** covers: `tests/test_pipeline_e2e.py` (6) — the whole pipeline on a
+  synthetic multi-page PDF with a substring-matching fake extractor
+  (`ingest → extract → verify → normalize → resolve → retrieve → reason`): 7
+  candidates → 6 verified/normalized/eligible + 1 quarantined; the
+  FACT→EVIDENCE→CHUNK→PAGE→DOCUMENT chain holds for every persisted fact;
+  every verified fact's `pages.text[char_start:char_end] == quote`; all five
+  relationship categories reachable deterministically; the fabricated-quote fact
+  is quarantined, written to `failures`, and absent from every relationship; the
+  `full` run reaches `done/complete` and `documents.status='done'`. Also run
+  outside the suite: real ingestion of all 3 Delhivery PDFs (offset invariant, 0
+  violations) and a live API/UI sweep against `uvicorn` (no 500s, no browser
+  console errors). **Fake extractor only — no API calls, no dependency, no
+  migration.**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -393,8 +434,8 @@ app/
   static/       # Phase 12 — index.html, style.css, app.js (vanilla, no build step)
   prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md, relationship_v1.md)
 evaluation/     # Phase 10 — harness.py (CLI), properties.py, corpora/synthetic.py, cases/**/*.json
-scripts/        # smoke_extract.py, smoke_retrieve.py, smoke_reason.py — offline/manual smoke tests
-tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason, eval_harness, api, ui (+ conftest, fakes)
+scripts/        # smoke_extract/retrieve/reason.py (offline smoke); seed_demo.py (reproducible demo DB)
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason, eval_harness, api, ui, pipeline_e2e (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

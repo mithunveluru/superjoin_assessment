@@ -240,6 +240,37 @@ positions and residual risks:
   `get_conn` opts into `False`. One connection per request, never shared
   concurrently — safe. Every non-API caller is unchanged.
 
+## End-to-end validation — what was and was not run (Phase 13, done)
+
+- **No live extraction on the real corpus.** `ANTHROPIC_API_KEY` is not available
+  here, so the pipeline was run for real only through **ingestion** on all 3
+  Delhivery PDFs (3 docs / 227 pages / 1006 chunks, offset invariant intact, 6
+  `ocr_page` failures). Stages 4–9 were validated deterministically with a
+  substring-matching fake extractor on a synthetic multi-page PDF
+  (`tests/test_pipeline_e2e.py`) — real Phase 5–9 code, controlled inputs. A
+  live run would be ~1006 LLM calls (≈ $1–3 at Sonnet-5 rates) plus, at most,
+  one `classify_relationship` call per residual semantic candidate pair.
+- **Natural contradiction / corroboration on the real corpus — not searched.**
+  The four required scenarios were demonstrated from the **labelled synthetic
+  pipeline fixture**, not from real extracted Delhivery facts. Whether the
+  Delhivery documents contain a *naturally occurring* face-value contradiction is
+  an open question that needs a keyed run (Phase 10's harness records "no natural
+  contradiction found" honestly when that is the case). Nothing in the repo
+  claims the corpus contains one.
+- **`scope` is a free string.** The Phase-4 extraction contract has `scope` as a
+  plain string; `app/extract.py` stores it as `{"raw": <string>}`. So
+  `signals.scope_conflict` can only ever report the key `raw`, and a
+  `DIFFERENT_CONTEXT` `context_dimension` is `scope:raw` rather than
+  `scope:basis` / `scope:segment` / `scope:geography`. It still *works* — a
+  standalone-vs-consolidated difference is correctly read as context, not
+  contradiction — it just does not name which scope dimension differs. Parsing
+  scope into keyed dimensions generically (without corpus vocabulary) is a future
+  enhancement; it was **not** patched in, per the "no corpus-specific rules"
+  rule.
+- **Config not tuned against data.** Retrieval / numeric / confidence thresholds
+  keep their Phase-0 starting values. Real tuning needs both corpora processed
+  with a key; the Phase-10 sweep mechanism is ready for it.
+
 ## Candidate retrieval — lexical baseline, broad by design (Phase 8, done)
 
 `app/retrieve.py` + `app/signals.py` generate candidate pairs and deterministic
