@@ -141,6 +141,45 @@ their residual risks:
   category work with no `ANTHROPIC_API_KEY`; the key only enables the semantic
   step for the residual ambiguous pairs.
 
+## Evaluation harness — synthetic corpus here, real tuning deferred (Phase 10, done)
+
+`evaluation/harness.py` checks four structural properties + four global
+invariants and runs a curated config sweep. Accepted positions and residual
+risks:
+
+- **Corpus-dependent relationship coverage.** The four required categories are
+  demonstrated on a **synthetic offline corpus** (`evaluation/corpora/synthetic.py`,
+  ~7 seeded facts, no LLM), not on the starter PDFs — real extraction needs a key
+  (as in Phases 4–9). The synthetic facts are generic wording ("Acme", "revenue
+  from operations"); they are a fixture for the harness, **not** a claim about
+  any real corpus. `--corpus <dir>` runs the real pipeline when a key is present;
+  that path is written but unexercised here.
+- **False-property risk.** A property that is too weak passes trivially. Mitigated
+  by the honesty guards (`break_grounding`, `fabricate_corroboration` each flip
+  the corroboration property to FAIL; demoting a fact's eligibility trips an
+  invariant) — but the guards only cover the corroboration property and the
+  eligibility invariant directly; the contradiction / context / failure
+  properties are covered only by "they pass on the engineered fixture".
+- **Sweep is a mechanism, not a tuning.** On a 7-fact corpus, `retrieval_top_k`,
+  `retrieval_candidate_threshold`, and `relationship_confidence_threshold` do not
+  move any property (every pair is an entity-block structural candidate; there
+  are only 6 eligible facts). Only the numeric tolerances and
+  `predicate_similarity_threshold` show sensitivity. Real threshold selection —
+  and writing the chosen values into `.env.example` — is Phase 13 (both real
+  corpora + an unseen PDF + a key), per DECISIONS D19/D24.
+- **Config-relative reports.** The property predicates read
+  `numeric_equivalence_tolerance` / `numeric_contradiction_threshold` /
+  `predicate_similarity_threshold` from `Settings`, so a report is only
+  meaningful against the settings that produced the database. `run_db` on a DB
+  built under different settings can mislabel PASS/FAIL — the harness records the
+  settings it used in every report.
+- **`--corpus` is best-effort orchestration.** It calls each phase function in
+  order with no per-document error isolation beyond what those functions already
+  do; a mid-pipeline failure on one PDF aborts the run. Acceptable for a
+  diagnostic tool; a hardened pipeline is Phase 11's `pipeline.run`.
+- **No new dependency, no migration.** JSON specs (stdlib), a temp DB for the
+  synthetic path (cleaned up), `evaluation/reports/` is git-ignored.
+
 ## Candidate retrieval — lexical baseline, broad by design (Phase 8, done)
 
 `app/retrieve.py` + `app/signals.py` generate candidate pairs and deterministic

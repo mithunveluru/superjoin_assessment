@@ -400,3 +400,52 @@ Phase-3 table already fits); forcing a binary CORROBORATES/CONTRADICTS instead o
 **Revisit when:** Phase 10's harness has labelled properties — tune the tolerance
 knobs and the confidence formula against them; consider an `add_relationship`
 upsert if re-running reasoning in place (not just on a fresh DB) becomes a need.
+
+## D24 — Phase 10 harness: structural properties + a synthetic offline corpus + a curated sweep
+
+**Decision:** `evaluation/harness.py` evaluates a processed database against
+**structural property predicates** (`evaluation/properties.py`) — Python
+functions that name no entity, figure, or filename and generalise to any corpus.
+The four `evaluation/cases/**/*.json` files are thin specs
+(`{property, corpus, must_hold, description}`) that reference a registered
+predicate; the machine logic lives in code, not in the spec. A **synthetic
+offline corpus** (`evaluation/corpora/synthetic.py`, ~7 seeded facts, no LLM)
+makes the harness and its honesty guards runnable and `pytest`-validated in an
+environment with no `ANTHROPIC_API_KEY`. A **curated config sweep** (a handful of
+named configs, not a full cartesian product) re-runs reasoning per config and
+prints a property-pass table.
+**Why:**
+- *Structural, not answer keys.* "∃ a CORROBORATES across two documents with
+  differing wording and `base_value_delta_pct ≤ tol`" generalises; "Delhivery
+  revenue FY24 = ₹8,142 Cr" does not. The predicates read the persisted
+  `deterministic_signals` JSON, so they check the same evidence the reasoner used.
+- *JSON, not YAML.* The plan said "YAML/JSON"; no YAML library is installed and
+  the specs are trivial objects — `json` (stdlib) is the lazy correct choice.
+- *Synthetic corpus.* The real starter PDFs need a key for extraction (Phases
+  4–9 all hit this). A deterministic seeded fixture exercises every category and
+  failure type, so the harness, the four properties, the four invariants, and the
+  honesty guards are all real, running tests today — not code that only executes
+  "somewhere with a key". `--corpus <dir>` still runs the real pipeline when a
+  key is present.
+- *Honesty guards have teeth.* `break_grounding` (corroboration pair left
+  ineligible) and `fabricate_corroboration` (deck value far from report value)
+  each make `corroboration_cross_document` FAIL while the harness keeps running —
+  proving the property is not satisfiable by unsupported facts (EVALUATION_PLAN
+  §5). Demoting a relationship fact's `reasoning_eligible` trips the
+  no-ineligible-participant invariant.
+- *Curated sweep over a cartesian grid.* 16+ near-identical rows on a tiny corpus
+  teach nothing; seven named configs, each changing one knob, show exactly which
+  knob moves which property (`predicate_similarity_threshold=0.85` drops the
+  cross-document CORROBORATES; `numeric_contradiction_threshold=0.50` drops the
+  strict CONTRADICTS). The sweep restores the baseline DB state so the report
+  matches disk. Meaningful *tuning* still waits for the real corpus (Phase 13).
+**Rejected:** a declarative spec language interpreted by the harness (an
+interpreter to build and test for four checks); asserting specific figures /
+relationships (a "fake evaluator", correction N); running only against the real
+corpus (nothing validated here); a full `top_k × threshold × ...` product
+(illegible on a small corpus, and the axes that matter for this fixture are the
+numeric tolerances, not the retrieval knobs).
+**Revisit when:** Phase 13 runs the harness on both real corpora + an unseen PDF
+with a key — the sweep's `recommended` config gets written into `.env.example`
+with a comment citing that run (D19), and a real contradiction/corroboration
+example is filled into EVALUATION_PLAN §6.

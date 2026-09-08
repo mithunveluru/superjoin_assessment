@@ -1,0 +1,6 @@
+{
+  "property": "failure_surface_populated",
+  "corpus": "any",
+  "must_hold": true,
+  "description": "The failures table is non-empty with at least one machine-readable failure_type (extraction_unparsed, grounding_failed, context_incomplete, ocr_page, normalization_failed, entity_ambiguous, relationship_uncertain), every failure row has a non-empty reason, and every fact a failure points at is QUARANTINED and absent from every relationship."
+}

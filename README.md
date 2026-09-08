@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–9 of 15 complete; Phase 10 not started.** This repo contains
+> **Status: Phases 1–10 of 15 complete; Phase 11 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -92,7 +92,23 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > `llm_used`, `llm_proposed_category`, and `validation_action`; every `UNCERTAIN`
 > pair also writes a `relationship_uncertain` failure. Phase 9 does not retrieve,
 > re-resolve, re-verify, or re-normalize, and never changes a fact's lifecycle or
-> evidence. The **evaluation harness** (Phase 10) is next, see
+> evidence. The **evaluation harness** (`evaluation/harness.py`) then checks
+> **expected properties** — never hard-coded answers — over a processed database:
+> the four required cases as structural predicates (a cross-document
+> `CORROBORATES` within the equivalence tolerance; a `CONTRADICTS` meeting the
+> strict signal profile; an apparent-conflict pair reconciled by a named
+> `context_dimension`; a populated failure surface whose quarantined facts are
+> absent from every relationship) plus four global invariants (evidence on both
+> sides, no unverified/ineligible fact, a `context_dimension` on every
+> context/temporal relationship, a reason on every `UNCERTAIN` and every
+> failure). `python -m evaluation.harness` builds a deterministic **synthetic
+> offline corpus** (no LLM) that exercises all of them and exits non-zero if any
+> `must_hold` property or invariant fails; `--sweep` re-runs reasoning under a
+> curated config grid and prints which knob moves which property; `--corpus
+> <dir>` runs the real pipeline when `ANTHROPIC_API_KEY` is set; `--db <path>`
+> evaluates an existing database. Honesty guards (an ineligible corroboration
+> pair, or a fabricated value) flip the corroboration property to FAIL, proving
+> it is not satisfiable by unsupported facts. The **API** (Phase 11) is next, see
 > [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
 > positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
@@ -260,6 +276,19 @@ pytest
   mutation, an LLM exception leaves the run `done`); a corpus-string grep; a real
   starter-PDF deterministic smoke. **Fake confirmer only — no API calls, no new
   dependency, schema unchanged (`user_version` 3).**
+- **Phase 10** covers: the synthetic offline corpus passing all four case
+  properties + all four global invariants and producing every relationship
+  category; the four `evaluation/cases/**/*.json` files mapping 1:1 to registered
+  predicates; the honesty guards (`break_grounding` and `fabricate_corroboration`
+  each flip `corroboration_cross_document` to FAIL while the harness keeps
+  running; demoting a relationship fact's `reasoning_eligible` trips the
+  no-ineligible-participant invariant); the config sweep table having teeth
+  (`predicate_similarity_threshold=0.85` loses the cross-document CORROBORATES,
+  `numeric_contradiction_threshold=0.50` loses the strict CONTRADICTS) and
+  restoring the baseline DB state; the CLI exiting 0 on the synthetic corpus and
+  writing a JSON report; `run_db` on an unprocessed database failing gracefully
+  (no crash); an `evaluation/*.py` corpus-string grep. **No LLM, no API key, no
+  new dependency, no migration.**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -303,8 +332,9 @@ app/
   signals.py    # Phase 8 — deterministic comparison signals (signals.compute)
   reason.py     # Phase 9 — relationship reasoning (reason_document, reason_pair, deterministic_verdict)
   prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md, relationship_v1.md)
+evaluation/     # Phase 10 — harness.py (CLI), properties.py, corpora/synthetic.py, cases/**/*.json
 scripts/        # smoke_extract.py, smoke_retrieve.py, smoke_reason.py — offline/manual smoke tests
-tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason (+ conftest, fakes)
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason, eval_harness (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

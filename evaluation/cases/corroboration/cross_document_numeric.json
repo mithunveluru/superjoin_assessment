@@ -1,0 +1,6 @@
+{
+  "property": "corroboration_cross_document",
+  "corpus": "any",
+  "must_hold": true,
+  "description": "There exists a CORROBORATES relationship whose two facts are from different documents, with differing object_raw and differing predicate, both sides evidence_status in (VERIFIED, PARTIAL) with at least one VERIFIED, and base_value_delta_pct <= numeric_equivalence_tolerance. No entity, figure, or filename is named — the check is purely structural."
+}

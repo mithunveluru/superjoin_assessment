@@ -10,7 +10,7 @@ committed.) Assertions are **structural properties**, never hard‑coded answers
 Revised phase order (per review): evaluation harness now lands **before** the API
 so retrieval/threshold tuning is evidence‑driven.
 
-**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 ✅ · Phase 10 not started.
+**Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 ✅ · Phase 6 ✅ · Phase 7 ✅ · Phase 8 ✅ · Phase 9 ✅ · Phase 10 ✅ · Phase 11 not started.
 
 | Phase | Title |
 |---|---|
@@ -612,28 +612,86 @@ rule change needs a fresh `relationships` table.
 
 ---
 
-## PHASE 10 — Evaluation harness
+## PHASE 10 — Evaluation harness  ✅ COMPLETE
 
-**Objective:** first‑class evaluation. `evaluation/cases/{corroboration,
-contradiction,contextual,failure}/` hold **expected‑property specs** (YAML/JSON),
-not answers. `evaluation/harness.py` runs the pipeline on a corpus and checks
-properties; also a threshold sweep to tune `candidate_threshold`, `top_k`,
-`predicate_similarity_threshold`, `relationship_confidence_threshold`.
-**Files:** `evaluation/harness.py`, `evaluation/cases/**`,
-`tests/test_eval_harness.py`.
-**Property examples (per EVALUATION_PLAN):** a `CORROBORATES` across two documents
-with differing raw wording and both sides `VERIFIED`; ≥1 `CONTRADICTS` meeting
-the strict signal profile *or* a recorded reason none exists; ≥1
-`DIFFERENT_CONTEXT` **or** `TEMPORAL_EVOLUTION` with a `context_dimension`; ≥1
-quarantined extraction present in `failures` and absent from reasoning; every
-relationship has evidence on both sides; no `UNVERIFIED` fact participates.
-**Tuning:** harness emits a table of (threshold set → property pass count,
-precision proxy) so config values are chosen from data, not guessed. A guard test
-fails if the evidence gate is disabled.
-**Acceptance:** `python -m evaluation.harness --corpus tests/data/delhivery`
-prints per‑property PASS/FAIL + the tuning table; `test_eval_harness` asserts the
-harness itself is honest (disabling grounding flips a property to FAIL).
-**Gate:** evaluation runs, properties are real, thresholds are data‑chosen.
+**Objective:** first‑class evaluation — run the pipeline (or evaluate an existing
+DB), check **expected properties** (never hard‑coded answers), and sweep the
+config.
+**Files shipped:** `evaluation/__init__.py`, `evaluation/harness.py`
+(`evaluate`, `run_synthetic` / `run_db` / `run_corpus`, `sweep_thresholds`,
+`load_cases`, CLI `main`), `evaluation/properties.py` (four case predicates +
+four global invariants, all structural — no entity/figure/filename), `evaluation/
+corpora/synthetic.py` (`seed_corpus` — a deterministic LLM‑free fixture with two
+honesty knobs), `evaluation/cases/{corroboration,contradiction,contextual,
+failure}/*.json` (property specs: `{property, corpus, must_hold, description}`,
+JSON not YAML — no new dependency), `tests/test_eval_harness.py` (11 tests). No
+migration, no new dependency.
+
+**How it runs.**
+- `python -m evaluation.harness` — builds the **synthetic offline corpus** (7
+  seeded facts + evidence + one resolved entity, engineered so retrieval +
+  reasoning yield CORROBORATES 1 / CONTRADICTS 1 / DIFFERENT_CONTEXT 3 /
+  TEMPORAL_EVOLUTION 2 / UNCERTAIN 8 and one `grounding_failed` quarantine),
+  evaluates every property + invariant, prints per‑property PASS/FAIL, exits 0
+  iff all `must_hold` case‑properties and all invariants pass.
+- `--sweep` — re‑runs reasoning under a curated config grid (`baseline`,
+  `retrieval_top_k=5`, `candidate_threshold=0.80`,
+  `predicate_similarity_threshold=0.85`, `relationship_confidence_threshold=0.90`,
+  `numeric_equivalence_tolerance=0.001`, `numeric_contradiction_threshold=0.50`)
+  and prints a `(config → per‑property pass, #relationships, #UNCERTAIN,
+  #quarantined, must‑hold)` table + a `recommended` config, then restores the
+  baseline DB state. The grid has real teeth: `predicate_similarity_threshold=0.85`
+  drops the cross‑document CORROBORATES; `numeric_contradiction_threshold=0.50`
+  drops the strict CONTRADICTS **and** the apparent‑conflict context case.
+- `--db <path>` — evaluate an already‑processed database, no pipeline run.
+- `--corpus <dir>` — run the real ingest→extract→verify→normalize→resolve→reason
+  pipeline over a directory of PDFs; exits with a clear message if
+  `ANTHROPIC_API_KEY` is unset (extraction needs it). Not exercised in this
+  environment — same key constraint as Phases 4–9.
+
+**Properties (structural, generalise to any corpus).**
+1. `corroboration_cross_document` — ∃ CORROBORATES, `fact_a.document_id ≠
+   fact_b.document_id`, differing `object_raw` and `predicate`, both
+   `evidence_status ∈ {VERIFIED, PARTIAL}` (≥1 VERIFIED),
+   `base_value_delta_pct ≤ numeric_equivalence_tolerance`.
+2. `contradiction_strict_profile` — ∃ CONTRADICTS with same entity,
+   `predicate_similarity ≥ threshold` (or exact), `unit_equivalent`,
+   `period_relation ∈ {equal, overlaps}`, no `scope_conflict`, both modality
+   HISTORICAL/ASSERTED, `base_value_delta_pct > numeric_contradiction_threshold`,
+   `validation_action ∈ {not_applicable, accepted}`, reasoning present. (A corpus
+   with no face‑value contradiction sets `must_hold=false` and records it.)
+3. `context_reconciled_with_dimension` — ∃ DIFFERENT_CONTEXT / TEMPORAL_EVOLUTION
+   with `base_value_delta_pct > numeric_contradiction_threshold` (*looks* like a
+   conflict) but `context_dimension` set, reasoning present, both sides grounded.
+4. `failure_surface_populated` — `failures` non‑empty with ≥1 machine type, every
+   row has a `reason`, every fact a failure points at is `QUARANTINED` and absent
+   from every relationship.
+**Global invariants** (every run): every relationship has an evidence chain on
+both sides; no `UNVERIFIED` / non‑`reasoning_eligible` fact participates; every
+TEMPORAL_EVOLUTION / DIFFERENT_CONTEXT has a `context_dimension`; every UNCERTAIN
+relationship and every `failures` row has a reason.
+
+**Honesty guards (tests).** `seed_corpus(break_grounding=True)` leaves the
+corroboration pair ineligible → `corroboration_cross_document` FAILs while the
+harness still runs and the other invariants hold.
+`seed_corpus(fabricate_corroboration=True)` sets the deck value far from the
+report value → the pair classifies CONTRADICTS not CORROBORATES → the property
+FAILs (unsupported facts cannot satisfy it). Demoting a relationship fact's
+`reasoning_eligible` → `no_unverified_or_ineligible_participates` FAILs.
+
+**Acceptance (met):** `python -m evaluation.harness --sweep` prints per‑property
+PASS/FAIL + the sweep table and exits 0 on the synthetic corpus; the four case
+files map 1:1 to registered properties; the honesty knobs flip the corroboration
+property to FAIL; the sweep detects configs that break a must‑hold property; no
+`evaluation/*.py` contains a starter‑corpus string. 360 tests pass, ruff clean.
+**Gate:** evaluation runs, properties are real and structural, the sweep is
+config‑driven and has teeth. **Met.**
+
+**Limitations (carried to RISKS):** the synthetic corpus is deliberately tiny, so
+`retrieval_top_k` / `candidate_threshold` / `relationship_confidence_threshold`
+don't move its properties — meaningful threshold tuning needs the real corpus +
+an API key (Phase 13); the property predicates read config tolerances, so a
+report is only meaningful against the settings that produced the DB.
 
 ---
 

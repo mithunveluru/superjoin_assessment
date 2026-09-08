@@ -1,0 +1,6 @@
+{
+  "property": "context_reconciled_with_dimension",
+  "corpus": "any",
+  "must_hold": true,
+  "description": "There exists a DIFFERENT_CONTEXT or TEMPORAL_EVOLUTION relationship whose base_value_delta_pct > numeric_contradiction_threshold (it *looks* like a conflict) but a context_dimension is set, reasoning names the reconciling dimension, and both sides are grounded. Covers scope:*, period_type, time, and vintage reconciliations without naming any of them."
+}

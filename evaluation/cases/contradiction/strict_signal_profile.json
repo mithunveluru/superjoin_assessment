@@ -1,0 +1,6 @@
+{
+  "property": "contradiction_strict_profile",
+  "corpus": "any",
+  "must_hold": true,
+  "description": "There exists a CONTRADICTS relationship with the strict signal profile: same resolved entity, predicate_similarity >= predicate_similarity_threshold (or exact), unit_equivalent, period_relation in (equal, overlaps), no scope_conflict, both modality in (HISTORICAL, ASSERTED), base_value_delta_pct > numeric_contradiction_threshold, deterministic validation did not demote it, and reasoning is present. If a corpus has no face-value contradiction, set must_hold false and record it (EVALUATION_PLAN section 4)."
+}
