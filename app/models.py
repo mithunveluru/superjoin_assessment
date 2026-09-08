@@ -511,3 +511,242 @@ class DocReasoningSummary(BaseModel):
     errors: int = 0
     by_category: dict[str, int] = Field(default_factory=dict)
     error: str | None = None
+
+
+# --- Phase 11: HTTP API (see docs/API_DESIGN.md) ------------------------
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+
+
+class ErrorOut(BaseModel):
+    error: ErrorDetail
+
+
+class NumericRepr(BaseModel):
+    value_raw: str | None = None
+    numeric_value: float | None = None
+    magnitude: str | None = None
+    magnitude_factor: float | None = None
+    base_value: float | None = None
+    currency: str | None = None
+    is_percentage: bool = False
+    percentage_ratio: float | None = None
+    unit_raw: str | None = None
+    unit_norm: str | None = None
+
+
+class ReportingPeriod(BaseModel):
+    raw: str | None = None
+    start: str | None = None
+    end: str | None = None
+    type: str | None = None
+
+
+class EvidenceOut(BaseModel):
+    page_index: int | None = None
+    printed_label: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    quote: str | None = None
+    method: str | None = None
+    verification_method: str | None = None
+    fuzzy_score: float | None = None
+    numeric_rederivation: str | None = None
+    evidence_status: str | None = None
+    evidence_score: float | None = None
+    notes: str | None = None
+
+
+class ReproOut(BaseModel):
+    extraction_model: str | None = None
+    prompt_version: str | None = None
+    extraction_temperature: float | None = None
+
+
+class EntityRef(BaseModel):
+    id: int
+    canonical_label: str | None = None
+
+
+class FactOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    document_id: int
+    document_title: str | None = None
+    publisher: str | None = None
+    disclosure_type: str | None = None
+    publication_date: str | None = None
+    data_vintage: str | None = None
+    page_index: int
+    printed_label: str | None = None
+    lifecycle_state: str
+    reasoning_eligible: bool
+    subject_raw: str
+    entity: EntityRef | None = None
+    predicate: str
+    predicate_norm: str | None = None
+    object_raw: str
+    fact_type: str
+    numeric: NumericRepr | None = None
+    value_text: str | None = None
+    reporting_period: ReportingPeriod
+    scope: dict[str, Any] | None = None
+    qualifiers: list[str] = Field(default_factory=list)
+    modality: str
+    context_complete: bool = False
+    evidence_status: str
+    evidence: EvidenceOut | None = None
+    repro: ReproOut
+    # detail-only
+    context_window: str | None = None
+    raw_extraction: dict[str, Any] | None = None
+    relationships: list[dict[str, Any]] | None = None
+
+
+class FactsPage(BaseModel):
+    items: list[FactOut]
+    total: int
+
+
+class RelationshipOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    category: str
+    category_label: str
+    context_dimension: str | None = None
+    fact_a: FactOut
+    fact_b: FactOut
+    deterministic_signals: dict[str, Any] = Field(default_factory=dict)
+    llm_used: bool = False
+    llm_proposed_category: str | None = None
+    validation_action: str = "not_applicable"
+    validation_notes: str | None = None
+    reasoning: str | None = None
+    confidence: float | None = None
+    created_at: str | None = None
+
+
+class RelationshipsPage(BaseModel):
+    items: list[RelationshipOut]
+    total: int
+
+
+class RunOut(BaseModel):
+    run_id: int
+    run_type: str
+    status: str
+    stage: str | None = None
+    stats: dict[str, Any] = Field(default_factory=dict)
+    model_name: str | None = None
+    prompt_versions: dict[str, Any] | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
+
+
+class DocumentCounts(BaseModel):
+    pages: int = 0
+    facts: int = 0
+    facts_unverified: int = 0
+    facts_quarantined: int = 0
+    eligible_facts: int = 0
+    relationships: int = 0
+    by_category: dict[str, int] = Field(default_factory=dict)
+    failures: int = 0
+
+
+class DocumentOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    sha256: str
+    original_filename: str | None = None
+    title: str | None = None
+    publisher: str | None = None
+    disclosure_type: str | None = None
+    document_date: str | None = None
+    publication_date: str | None = None
+    data_vintage: str | None = None
+    fy_convention: str | None = None
+    fy_convention_source: str | None = None
+    page_count: int | None = None
+    status: str
+    status_detail: str | None = None
+    duplicate: bool = False
+    uploaded_at: str | None = None
+    processed_at: str | None = None
+    counts: DocumentCounts | None = None
+    latest_run: RunOut | None = None
+
+
+class DocumentsPage(BaseModel):
+    items: list[DocumentOut]
+    total: int
+
+
+class ProcessOut(BaseModel):
+    run_id: int
+    document_id: int
+    status: str
+    stage: str | None = None
+    started_at: str | None = None
+
+
+class StatusOut(BaseModel):
+    document_id: int
+    status: str
+    run: RunOut | None = None
+
+
+class AliasOut(BaseModel):
+    surface: str
+    normalized: str | None = None
+    match_method: str | None = None
+    score: float | None = None
+    source_fact_id: int | None = None
+
+
+class EntityOut(BaseModel):
+    id: int
+    canonical_label: str
+    entity_type: str | None = None
+    normalization_key: str | None = None
+    alias_count: int = 0
+    fact_count: int = 0
+    resolution_method: str | None = None
+    resolution_score: float | None = None
+    llm_confirmed: bool = False
+    llm_confidence: float | None = None
+    aliases: list[AliasOut] | None = None
+    sample_facts: list[FactOut] | None = None
+
+
+class EntitiesPage(BaseModel):
+    items: list[EntityOut]
+    total: int
+
+
+class FailureOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    failure_type: str
+    reason: str
+    ref_table: str | None = None
+    ref_id: int | None = None
+    detail: dict[str, Any] | list[Any] | str | None = None
+    document_id: int | None = None
+    run_id: int | None = None
+    created_at: str | None = None
+    fact: FactOut | None = None
+    relationship: RelationshipOut | None = None
+
+
+class FailuresPage(BaseModel):
+    items: list[FailureOut]
+    total: int
+    counts_by_type: dict[str, int] = Field(default_factory=dict)

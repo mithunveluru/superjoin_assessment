@@ -449,3 +449,52 @@ numeric tolerances, not the retrieval knobs).
 with a key — the sweep's `recommended` config gets written into `.env.example`
 with a comment citing that run (D19), and a real contradiction/corroboration
 example is filled into EVALUATION_PLAN §6.
+
+## D25 — Phase 11 API: thin FastAPI over the sqlite layer, sync routes, umbrella pipeline run
+
+**Decision:** `app/main.py` holds 14 routes; `app/queries.py` does all DB→dict
+shaping (no writes, no LLM); `app/pipeline.py` sequences Phases 4-9. Routes are
+plain `def` (not `async`) with a per-request `sqlite3` connection from a
+`get_conn` dependency; `POST /documents/{id}/process` returns immediately and a
+`BackgroundTask` runs the pipeline.
+**Why:**
+- *Sync routes.* The connection from `get_conn` is bound to the request's worker
+  thread (sqlite's `check_same_thread`). An `async def` route runs in the loop
+  thread while the sync dependency runs in a worker — different thread, sqlite
+  raises. Making every route `def` keeps route + dependency on one thread with no
+  global `check_same_thread=False` (which would paper over real races). The
+  upload route reads the file via `file.file.read()` for the same reason.
+- *`queries.py` returns dicts, `main.py` owns the models.* The shaping is nested
+  (a fact carries its evidence, entity, numeric repr, period, repro; a
+  relationship carries two facts). Keeping it as dict-building over `sqlite3.Row`
+  matches the rest of the codebase (no ORM, no repo layer, D1) and lets the
+  pydantic response models validate the shape at the boundary. `scope`,
+  `deterministic_signals`, `context_window`, and failure `detail` stay
+  `dict`/`Any` — they are already structured JSON.
+- *Umbrella `full` run.* Each phase function (Phases 4-9) already opens its own
+  `runs` row. `pipeline.start` opens one `run_type='full'` row synchronously so
+  the 202 response carries a real `run_id`; `pipeline.run` walks the stages,
+  writing `stage` and *aggregate* stats (counted from the tables, not summed from
+  sub-runs where fragile) after each. `GET /status` reports the `full` run. A
+  stage that raises, reports `status='failed'`, or (extract only) errors on every
+  chunk with nothing persisted stops the pipeline: `full` run `failed` +
+  `documents.status='failed'` + `status_detail`. An honest 0-fact extraction with
+  no errors is **not** a failure.
+- *`python-multipart` added.* The frozen API_DESIGN specifies `POST /documents`
+  as `multipart/form-data`. `python-multipart` is FastAPI's standard companion
+  for that (one small pure-Python package, Starlette-org maintained) — justified
+  by the contract, not gratuitous. A raw-body alternative was rejected as a
+  gratuitous deviation from the frozen contract.
+- *Deviations, documented.* `deterministic_signals` is the real persisted
+  `SignalSet` dump, not the Phase-0 renamed subset — the reviewer should see the
+  actual signal names Phase 9 uses. `period_overlaps` (a fact filter needing
+  per-document FY-convention resolution) is not implemented; it is not in the
+  acceptance and would add real complexity for a nicety.
+**Rejected:** an ORM / repository layer (D1 — sqlite rows directly); `async`
+routes + an async DB driver (a second driver and rewrite for a local prototype);
+a queue/worker for processing (D4 — `BackgroundTask` + the `runs` table already
+model async state); strict pydantic sub-models for every nested JSON blob (churn
+with no payoff — they are already validated JSON).
+**Revisit when:** concurrent uploads or multi-minute PDFs — move `pipeline.run`
+behind a worker (D4); the fact list needs `period_overlaps` — resolve the label
+through `documents.fy_convention` (the normalizer already has `parse_period`).

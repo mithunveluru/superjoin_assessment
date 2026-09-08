@@ -16,6 +16,9 @@ anthropic>=1.4
 # Phase 5 — evidence verification (conservative fuzzy matching only)
 rapidfuzz>=3.6
 
+# Phase 11 — API (multipart file upload for POST /documents)
+python-multipart>=0.0.9
+
 # dev / test
 pytest>=8.0
 ruff>=0.6

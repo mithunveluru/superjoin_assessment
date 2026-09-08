@@ -29,7 +29,7 @@ guess.
 Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 `DIFFERENT_CONTEXT`, `TEMPORAL_EVOLUTION`, or `UNCERTAIN`.
 
-> **Status: Phases 1–10 of 15 complete; Phase 11 not started.** This repo contains
+> **Status: Phases 1–11 of 15 complete; Phase 12 not started.** This repo contains
 > the project skeleton, centralised configuration, the full SQLite schema (+ a
 > forward-only migration mechanism), database utilities, a health check, a
 > **corpus-agnostic PDF ingestion layer**, the **canonical fact + evidence +
@@ -108,9 +108,19 @@ Relationships are classified as `CORROBORATES`, `CONTRADICTS`,
 > <dir>` runs the real pipeline when `ANTHROPIC_API_KEY` is set; `--db <path>`
 > evaluates an existing database. Honesty guards (an ineligible corroboration
 > pair, or a fabricated value) flip the corroboration property to FAIL, proving
-> it is not satisfiable by unsupported facts. The **API** (Phase 11) is next, see
-> [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate design
-> positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
+> it is not satisfiable by unsupported facts. The **HTTP API** (`app/main.py` +
+> `app/queries.py` + `app/pipeline.py`) wires every `docs/API_DESIGN.md` endpoint
+> to the storage: `POST /documents` (multipart upload → ingest, SHA-dedup),
+> `POST /documents/{id}/process` (a `BackgroundTask` runs
+> extract→ground→normalize→resolve→reason, writing `runs.stage`/stats and
+> `documents.status`), `GET /documents/{id}/status` (a failed stage surfaces its
+> error at HTTP 200), and read endpoints for facts, relationships, entities, and
+> the failure surface — each with the documented filter matrix, `?limit`/`?offset`
+> pagination, and a common `{"error": {code, message}}` body. `uvicorn
+> app.main:app` boots the app with `/docs` (OpenAPI); a full run through HTTP
+> needs `ANTHROPIC_API_KEY` for extraction. The **static UI** (Phase 12) is next,
+> see [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Deliberate
+> design positions and known risks are in [`docs/RISKS.md`](docs/RISKS.md).
 
 ## Design docs
 
@@ -150,11 +160,26 @@ uvicorn app.main:app --reload
 ```
 
 On startup the app creates `data/knowledge.db` from `app/schema.sql` (the genesis
-schema) and applies any pending migrations from `app/db.py`. Check it:
+schema) and applies any pending migrations from `app/db.py`. Interactive API docs
+are at `http://localhost:8000/docs`. Check it:
 
 ```bash
 curl -s localhost:8000/health | python -m json.tool
 ```
+
+**Inspect a corpus through the API** (a full run needs `ANTHROPIC_API_KEY` for
+extraction):
+
+```bash
+curl -F file=@starter-datasets/delhivery/03-*.pdf localhost:8000/documents
+curl -X POST localhost:8000/documents/1/process         # -> 202, runs in the background
+curl -s localhost:8000/documents/1/status                # poll until status = done | failed
+curl -s 'localhost:8000/facts?document_id=1&lifecycle_state=ELIGIBLE_FOR_REASONING'
+curl -s 'localhost:8000/relationships?category=CORROBORATES'
+curl -s localhost:8000/failures
+```
+
+No auth — local prototype only.
 
 ```json
 {
@@ -289,6 +314,22 @@ pytest
   writing a JSON report; `run_db` on an unprocessed database failing gracefully
   (no crash); an `evaluation/*.py` corpus-string grep. **No LLM, no API key, no
   new dependency, no migration.**
+- **Phase 11** covers: the read endpoints against a seeded database — document
+  list/detail with `counts` + `latest_run`, the fact filter matrix
+  (`type`/`lifecycle_state`/`evidence_status`/`reasoning_eligible`/`document_id`/
+  FTS `q`/`predicate` substring) and `?limit`/`?offset` pagination, fact detail
+  shape (`numeric`, `evidence.quote`, `context_window`, `relationships`), the
+  relationship list + `category` filter + `category_label` + both `FactOut`
+  sub-objects + persisted `deterministic_signals`, entity list/detail
+  (`alias_count`, `fact_count`, `aliases`, `sample_facts`), the failure surface
+  (`counts_by_type`, a QUARANTINED `fact` on `grounding_failed`, a `relationship`
+  on `relationship_uncertain`); unknown id → 404 with the common error body on
+  every resource; multipart upload → 201 then a duplicate → 200 `"duplicate":
+  true`; a non-PDF / bad-magic upload → 400 `invalid_pdf`; a keyless `POST
+  /documents/{id}/process` → 202 then `GET /status` shows `run.status="failed"` +
+  `run.error` at HTTP 200; `pipeline.run` reaching `done` with an empty fake
+  extractor and `failed@extract` with a raising one. **Fakes only — no API calls.
+  New dep: `python-multipart`. Schema unchanged (`user_version` 3).**
 
 Unit tests use small synthetic PDFs / synthetic source rows and a fake LLM
 client; the provided starter PDFs and any live Anthropic call are for manual
@@ -331,10 +372,13 @@ app/
   retrieve.py   # Phase 8 — bounded candidate-pair retrieval (retrieve_candidates, retrieval_summary)
   signals.py    # Phase 8 — deterministic comparison signals (signals.compute)
   reason.py     # Phase 9 — relationship reasoning (reason_document, reason_pair, deterministic_verdict)
+  pipeline.py   # Phase 11 — full-document orchestration (start + run, BackgroundTask)
+  queries.py    # Phase 11 — read/shaping layer for the API (no writes, no LLM)
+  main.py       # Phase 1 /health + Phase 11 REST API over the storage
   prompts/      # versioned prompts (extraction_v1.md, entity_confirm_v1.md, relationship_v1.md)
 evaluation/     # Phase 10 — harness.py (CLI), properties.py, corpora/synthetic.py, cases/**/*.json
 scripts/        # smoke_extract.py, smoke_retrieve.py, smoke_reason.py — offline/manual smoke tests
-tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason, eval_harness (+ conftest, fakes)
+tests/          # config, db, health, ingestion, facts, extraction, verification, normalization, entities, signals, retrieve, reason, eval_harness, api (+ conftest, fakes)
 docs/           # design artifacts
 starter-datasets/   # provided dataset READMEs (the PDFs are kept locally, git-ignored)
 ```

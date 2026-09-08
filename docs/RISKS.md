@@ -180,6 +180,39 @@ risks:
 - **No new dependency, no migration.** JSON specs (stdlib), a temp DB for the
   synthetic path (cleaned up), `evaluation/reports/` is git-ignored.
 
+## HTTP API — thin read layer, single-process pipeline (Phase 11, done)
+
+`app/main.py` + `app/queries.py` + `app/pipeline.py` expose the Phase 2-10
+storage over FastAPI. Accepted positions and residual risks:
+
+- **No auth.** Local prototype — every endpoint is open, uploads are unbounded
+  beyond `MAX_UPLOAD_MB` / `MAX_PAGES`, and `/docs` is live. Noted in the README;
+  a real deployment needs a reverse proxy + auth.
+- **Full run through HTTP needs a key.** `POST /documents/{id}/process` runs the
+  real pipeline; the `extract` stage needs `ANTHROPIC_API_KEY`. Without one the
+  run is marked `failed` at `extract` and surfaced at HTTP 200 (by design) — but
+  the "upload PDFs → inspect facts/relationships" flow is only *fully* exercised
+  end-to-end with a key. The pipeline wiring and the failure path are unit-tested
+  with fakes.
+- **Single process, single connection per request.** Routes are sync `def` with
+  a per-request `sqlite3` connection (thread-bound). WAL allows concurrent reads,
+  but a long `pipeline.run` `BackgroundTask` holds write locks; a second upload's
+  ingest can briefly contend (`busy_timeout` covers the common case). No
+  request-level locking beyond "a `running` full run short-circuits a second
+  `POST /process`". Fine for a demo; a worker + queue is the upgrade (D4).
+- **N+1 shaping.** `queries.fact_out` runs a few small follow-up queries per fact
+  (evidence, entity, printed label); a relationship shapes two facts; a failure
+  list shapes a fact/relationship per row. Microseconds at corpus scale; batch if
+  a corpus ever has ≫1e4 facts.
+- **Signal-name deviation from API_DESIGN.** `deterministic_signals` is the real
+  persisted `SignalSet` dump (`entity_relation`, `predicate_similarity`,
+  `modality_a`/`modality_b`, …), not the Phase-0 `entity_match` / `predicate_sim`
+  subset. A client written strictly to the frozen doc would need to map names.
+- **`period_overlaps` not implemented.** The documented fact filter needs
+  per-document FY-convention resolution; deferred (not in the acceptance).
+- **New dependency:** `python-multipart` (the documented multipart upload) — one
+  small pure-Python package. No migration; `user_version` stays 3.
+
 ## Candidate retrieval — lexical baseline, broad by design (Phase 8, done)
 
 `app/retrieve.py` + `app/signals.py` generate candidate pairs and deterministic
