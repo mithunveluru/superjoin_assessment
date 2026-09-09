@@ -7,14 +7,32 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header>
-    <h1>Fact Knowledge Layer</h1>
-    <nav id="nav"></nav>
-  </header>
-  <main id="view" aria-live="polite">loading&hellip;</main>
-  <footer>
-    local prototype &middot; no auth &middot; <a href="/docs">API docs</a>
-  </footer>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">FK</span>
+        <span class="brand-text">
+          <strong>Fact Knowledge Layer</strong>
+          <small>grounded facts &amp; relations</small>
+        </span>
+      </div>
+      <nav id="nav" class="nav" aria-label="Primary"></nav>
+      <div class="sidebar-foot">
+        Local prototype &middot; no auth<br>
+        <a href="/docs">API reference</a>
+      </div>
+    </aside>
+    <div class="content">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">Overview</h1>
+          <p class="sub" id="page-sub"></p>
+        </div>
+        <div class="topbar-side" id="topbar-side"></div>
+      </header>
+      <main id="view" aria-live="polite"></main>
+    </div>
+  </div>
   <script src="/static/app.js"></script>
 </body>
 </html>
