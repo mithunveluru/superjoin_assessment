@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 8192       # per-chunk extraction output cap
     llm_timeout_seconds: float = 120.0
     llm_retry_attempts: int = 5      # SDK-level retry on 429/5xx
+    # Abort a document once this many chunks fail back-to-back: when the provider
+    # is down or the quota is spent, every remaining chunk will fail the same way
+    # and each one costs the SDK's full retry/backoff ladder. Reset by any
+    # successful chunk, so an isolated bad chunk never trips it.
+    extract_consecutive_error_limit: int = 5
     # runs.estimated_cost_usd is an estimate only — set these to the configured
     # model's list price (defaults are gemini-2.5-flash rates).
     llm_input_cost_per_token: float = 0.3e-6

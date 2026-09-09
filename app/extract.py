@@ -158,6 +158,20 @@ def _record_failure(conn, run_id, document_id, failure_type, reason, ref_table,
     )
 
 
+def _abort_consecutive(conn, run_id, document_id, n, reason):
+    """Record why the run stopped early. Caller must hold a transaction.
+
+    A provider that is down, unauthorised or out of quota fails every remaining
+    chunk the same way, and each failure costs the SDK's full retry/backoff
+    ladder — a 300-chunk document took ~4 hours to produce nothing. Stopping at
+    the first sustained run of failures keeps that honest and fast.
+    """
+    _record_failure(
+        conn, run_id, document_id, "run_error", "consecutive_chunk_errors",
+        "documents", document_id, {"consecutive": n, "last_reason": reason},
+    )
+
+
 def _insert_raw_extraction(conn, *, run_id, document_id, page_index, chunk_id, result):
     parsed = result.parsed
     return conn.execute(
@@ -239,6 +253,7 @@ def extract_document(
         }
         facts_by_type: dict[str, int] = {}
         cost = 0.0
+        consecutive_errors = 0
 
         for chunk in chunks:
             if counts["chunks_processed"] >= settings.max_llm_calls_per_doc:
@@ -255,11 +270,16 @@ def extract_document(
                 result: LLMExtraction = client.extract(chunk["text"], header)
             except Exception as e:  # noqa: BLE001 - isolate a failing chunk, keep going
                 counts["extraction_errors"] += 1
+                consecutive_errors += 1
                 with db.transaction(conn):
                     _record_failure(
                         conn, run_id, document_id, "run_error", "llm_client_exception",
                         "chunks", chunk["id"], {"error": repr(e)[:300]},
                     )
+                    if consecutive_errors >= settings.extract_consecutive_error_limit:
+                        _abort_consecutive(conn, run_id, document_id, consecutive_errors,
+                                           "llm_client_exception")
+                        break
                 continue
             cost += (result.input_tokens * settings.llm_input_cost_per_token
                      + result.output_tokens * settings.llm_output_cost_per_token)
@@ -275,12 +295,18 @@ def extract_document(
                 )
                 if result.error_code in ("api_error", "rate_limit", "timeout", "refusal"):
                     counts["extraction_errors"] += 1
+                    consecutive_errors += 1
                     _record_failure(
                         conn, run_id, document_id, "run_error", result.error_code,
                         "raw_extractions", raw_id,
                         {"chunk_id": chunk["id"], "detail": result.error_detail},
                     )
+                    if consecutive_errors >= settings.extract_consecutive_error_limit:
+                        _abort_consecutive(conn, run_id, document_id, consecutive_errors,
+                                           result.error_code)
+                        break
                     continue
+                consecutive_errors = 0
                 if result.error_code in ("malformed_response", "truncated_response"):
                     _record_failure(
                         conn, run_id, document_id, "extraction_unparsed",

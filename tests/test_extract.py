@@ -392,3 +392,45 @@ def test_max_llm_calls_per_doc_caps_extraction(conn, db_path, make_source, monke
     ).fetchall()
     assert len(capped) == 1
     assert '"limit": 2' in capped[0]["detail"]
+
+
+def test_sustained_provider_failure_aborts_early(conn, db_path, make_source, monkeypatch):
+    """A dead/quota-exhausted provider must stop the run, not grind every chunk.
+
+    Regression: a 300-chunk document kept calling for all 300 chunks while every
+    call returned 429, each with the SDK's full retry/backoff ladder — ~4 hours
+    to produce nothing.
+    """
+    from app.config import get_settings
+
+    monkeypatch.setenv("FKL_EXTRACT_CONSECUTIVE_ERROR_LIMIT", "3")
+    get_settings.cache_clear()
+    src = make_source([f"Acme reported {n} units in FY24." for n in range(20)])
+    client = FakeLLM([api_error("rate_limit", "429 quota") for _ in range(20)])
+    res = extract_document(src["document_id"], client=client)
+
+    assert len(client.calls) == 3, "must stop at the consecutive-error limit"
+    assert res.chunks_processed == 3
+    row = conn.execute(
+        "SELECT detail FROM failures WHERE reason = 'consecutive_chunk_errors'"
+    ).fetchone()
+    assert row is not None, "the early abort must be recorded"
+    assert '"last_reason": "rate_limit"' in row["detail"]
+
+
+def test_isolated_failures_do_not_abort_the_run(conn, db_path, make_source, monkeypatch):
+    """The counter resets on success: scattered bad chunks never trip the abort."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("FKL_EXTRACT_CONSECUTIVE_ERROR_LIMIT", "3")
+    get_settings.cache_clear()
+    src = make_source([f"Acme reported {n} units in FY24." for n in range(6)])
+    good = {"facts": []}
+    script = [api_error("rate_limit", "429"), good, api_error("rate_limit", "429"), good,
+              api_error("rate_limit", "429"), good]
+    res = extract_document(src["document_id"], client=FakeLLM(script))
+
+    assert res.chunks_processed == 6, "no abort — failures were never consecutive"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM failures WHERE reason = 'consecutive_chunk_errors'"
+    ).fetchone()[0] == 0
