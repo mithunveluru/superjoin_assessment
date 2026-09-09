@@ -57,7 +57,9 @@ _FACT_COLS = (
     "f.reporting_period_end, f.reporting_period_type, f.scope, f.qualifiers, f.modality, "
     "f.context_complete, f.evidence_status, f.extraction_model, f.prompt_version, "
     "f.extraction_temperature, f.raw_extraction_id, "
-    "d.title AS document_title, d.publisher, d.disclosure_type, d.publication_date, "
+    # an uploaded PDF often has no parsed title; the filename still identifies it
+    "COALESCE(d.title, d.original_filename) AS document_title, "
+    "d.publisher, d.disclosure_type, d.publication_date, "
     "d.data_vintage"
 )
 
@@ -210,7 +212,12 @@ def list_facts(conn: sqlite3.Connection, *, filters: dict[str, Any],
         params.append(1 if f["reasoning_eligible"] else 0)
     if f.get("q"):
         where.append('f.id IN (SELECT fact_id FROM facts_fts WHERE facts_fts MATCH ?)')
-        params.append(f'"{f["q"]}"')
+        # FTS5 string literal: wrap in double quotes and double any embedded one.
+        # Without the escape a `"` in the query closes the literal early and the
+        # remainder is parsed as FTS syntax — `'";--` raised OperationalError,
+        # surfacing as a 500. Quoting also keeps the search literal: operators a
+        # user types (AND, NEAR, *) are matched as text, never executed.
+        params.append('"' + f["q"].replace('"', '""') + '"')
 
     clause = (" WHERE " + " AND ".join(where)) if where else ""
     total = conn.execute(

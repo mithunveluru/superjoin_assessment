@@ -168,6 +168,18 @@ def process_document(document_id: int, background_tasks: BackgroundTasks,
         return ProcessOut(run_id=existing["id"], document_id=document_id,
                           status=existing["status"], stage=existing["stage"],
                           started_at=existing["started_at"])
+    # ...but a document can hold facts without a *full* run behind them (stage
+    # runs, or a seeded fixture). Re-extracting those duplicates candidates and
+    # turns a good document into a failed one, so refuse rather than start.
+    facts = conn.execute(
+        "SELECT COUNT(*) FROM facts WHERE document_id = ?", (document_id,)
+    ).fetchone()[0]
+    if facts:
+        raise APIError(
+            409, "already_processed",
+            f"document {document_id} already holds {facts} fact(s); re-processing would "
+            f"duplicate them. Delete the document (or use a fresh database) to re-run.",
+        )
     with db.transaction(conn):
         run_id = pipeline.start(conn, document_id)
     row = conn.execute("SELECT stage, started_at FROM runs WHERE id = ?", (run_id,)).fetchone()
