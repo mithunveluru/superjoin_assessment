@@ -1,151 +1,144 @@
-# Demo script (3 minutes)
+# Recording walkthrough — 3 minutes
 
-Every number below is what the app actually shows with the demo database seeded.
-Times are cumulative. Words in *italics* are what to say; **bold** is what to click.
+Read the **SAY** lines aloud, word for word. Do the **DO** lines on screen while
+you say them. Timings are cumulative. The narration is 382 words — about
+2 min 45 s spoken, leaving room for click pauses inside three minutes.
 
-The relationship examples come from **`scripts/seed_demo.py`**, a deterministic
-**synthetic** two-document fixture (entity `Acme`) — a labelled *validation
-fixture*, not corpus-derived data. It is used for the demo because it exercises
-all five relationship categories in seven facts. A live Gemini extraction run on
-one real Delhivery PDF **was** performed (27 pages → 53 facts, 51 grounded); it
-is quoted at 2:35 rather than clicked. No cross-document relationship between two
-*real* documents is claimed. See README → *Validation status*.
-
-## Setup (once, off camera)
+## Before you hit record
 
 ```bash
-pip install -r requirements.txt
 FKL_DATABASE_PATH=data/demo.db python scripts/seed_demo.py --force
-FKL_DATABASE_PATH=data/demo.db uvicorn app.main:app        # http://localhost:8000/
+FKL_DATABASE_PATH=data/demo.db uvicorn app.main:app
 ```
 
-No API key and no network needed for the walkthrough itself.
-
-The dashboard should read **2 documents · 7 facts · 15 relationships · 1 entity
-· 9 failures**. If it doesn't, re-run the seed command.
-
----
-
-## 0:00–0:20 — What this is
-
-Open **Overview**.
-
-> *"Facts that matter are scattered across documents and stated differently. Two
-> reports can give different numbers for the same thing because they use a
-> different basis, a different period, or different units — and a naive
-> comparison calls every one of those a contradiction. This system grounds each
-> fact in its source evidence first, then compares facts through explicit
-> signals, so a contextual difference is never reported as a contradiction."*
-
-Point at the **pipeline strip** at the bottom:
-`PDF → ingest → extract → verify → normalize → resolve → retrieve → reason → API/UI`.
-
-> *"LLMs interpret meaning. Deterministic code verifies evidence, normalizes the
-> numbers, and makes the final call."*
-
-## 0:20–0:50 — A fact is only as good as its evidence
-
-**Facts** → set **Lifecycle** to `ELIGIBLE_FOR_REASONING` → **Apply** → click the
-row **`8,142 Cr · Acme · revenue from services`**.
-
-Point at, in order:
-
-- the **verbatim quote** — *"the exact sentence from the page"*
-- the source line — *"document, printed page, PDF page, and `verified exact`"*
-- **Reporting period** `FY24 [2023-04-01 → 2024-04-01) · fiscal_year`
-- expand **Normalized representation** → `base_value`, `currency INR`
-
-> *"Nothing becomes eligible for reasoning until its quote has been re-derived
-> from the source page — character offsets and all. The chain is fact → evidence
-> → chunk → page → document, and it either resolves or the fact is
-> quarantined."*
-
-## 0:50–1:15 — Corroboration across documents
-
-**Relationships** → **Corroborates** chip → open the card.
-
-- Fact A `81,415.38 million` — Annual Report
-- Fact B `8,142 Cr` — Earnings Deck
-
-Expand → **Deterministic signals**.
-
-> *"Different documents, different wording, different scale words — crore versus
-> million. After normalization they are the same number: the delta is
-> 0.006 percent and `unit_equivalent` is true. Same proposition, both grounded."*
-
-## 1:15–1:40 — A real contradiction
-
-**Contradicts** chip (the card carries a red edge) → open it.
-
-- `profit after tax · 5,000.00 million` vs `8,000.00 million`, same entity, same FY24
-
-> *"Same entity, same period, no scope difference, values 37.5 percent apart —
-> past the contradiction threshold. This one the system is willing to call a
-> genuine disagreement."*
-
-## 1:40–2:10 — The interesting case: context, not conflict
-
-**Different context** chip → open the card whose two facts are
-`81,415.38 million` and `74,540.82 million`, **both FY24**.
-
-Expand → **Why this call**.
-
-> *"These differ by 8.4 percent and share an entity and a period — a naive
-> system reports a contradiction. But one is consolidated and the other
-> standalone. `scope_conflict` is non-empty, so it is classified as different
-> context, with the dimension named: `scope:basis`. This is the case the whole
-> design exists for."*
-
-Then **Temporal evolution** → the FY24 vs FY23 pair.
-
-> *"Same measure, adjacent periods, value moved 26.3 percent. That is a number
-> that changed over time, not a disagreement."*
-
-## 2:10–2:35 — Abstention and failure are first-class
-
-**Uncertain** chip → open one.
-
-> *"Same entity and period, but `revenue from operations` versus `profit after
-> tax` — predicate similarity 0.27. Not the same measure, so the system abstains
-> instead of guessing. Eight of fifteen pairs here are uncertain by design."*
-
-**Failures** view.
-
-> *"And a fabricated quote — `permanent employees · 99,999` — failed
-> verification with `quote_not_found in source text`. It is quarantined: kept,
-> inspectable, promoted nowhere, and it can never enter a relationship."*
-
-## 2:35–3:00 — Close
-
-> *"The split is a deterministic core with the LLM used only for genuine
-> semantic ambiguity, and the deterministic layer always has the last word — an
-> LLM `CONTRADICTS` on numbers that are equal after normalization is overridden
-> to `CORROBORATES`."*
->
-> *"447 tests, ruff clean, no network needed. Beyond this fixture, a real
-> Delhivery PDF was extracted end-to-end with live Gemini — 27 pages, 53 facts,
-> 51 grounded against their source quotes. Limitations, including the free-tier
-> quota and extraction quality on boilerplate pages, are in `docs/RISKS.md` and
-> the README."*
+- Browser at **http://localhost:8000/**, on the **Overview** view.
+- Close other tabs; hide bookmarks bar. Browser zoom **100 %**, window ~1440 wide.
+- Check the five tiles read **2 · 7 · 15 · 1 · 1** (documents, facts,
+  relationships, entities, quarantined). If not, re-run the seed line.
+- Have the **Relationships** view loaded once already so it is warm.
 
 ---
 
-## If you have 30 extra seconds
+### 0:00 — 0:18 · Opening
 
-**Documents** → upload any PDF → **Process** → the row polls
-`processing → done | failed`, and a failed stage names its own reason inline.
-Needs `GEMINI_API_KEY` and remaining daily quota; without either, the row fails
-at `extract` within seconds and says exactly why.
+**DO** — Sit on **Overview**. Don't click anything yet.
 
-## Where each quoted number comes from
+**SAY**
+> "This is a fact knowledge layer. It reads PDFs, extracts facts, ties every one
+> to the exact sentence it came from, and works out how facts across documents
+> relate. The hard part isn't extraction — it's that two documents can state the
+> same thing with different numbers and both be correct."
 
-| Claim | Source |
-|---|---|
-| 2 docs · 7 facts · 15 relationships · 1 entity · 9 failures | `scripts/seed_demo.py`, deterministic |
-| corroboration delta 0.006 %, `unit_equivalent` | relationship signals, synthetic fixture |
-| contradiction 37.5 % vs the 15 % threshold | `FKL_NUMERIC_CONTRADICTION_THRESHOLD` |
-| different context 8.4 %, `scope:basis` | relationship signals, synthetic fixture |
-| temporal evolution 26.3 %, adjacent periods | relationship signals, synthetic fixture |
-| uncertain predicate similarity 0.27 | relationship signals, synthetic fixture |
-| 447 tests, ruff clean | `pytest`, `ruff check .` |
-| 27 pages, 53 facts, 51 grounded | live Gemini run, README → *Validation status* |
+---
+
+### 0:18 — 0:30 · The pipeline
+
+**DO** — Scroll to the **Pipeline** strip at the bottom of Overview.
+
+**SAY**
+> "The pipeline is ingest, extract, verify, normalize, resolve, retrieve,
+> reason. The language model only interprets meaning. Deterministic code
+> verifies the evidence, normalizes the numbers, and makes the final call."
+
+---
+
+### 0:30 — 1:00 · Every fact is grounded
+
+**DO** — Click **Facts** → set **Lifecycle** to `ELIGIBLE_FOR_REASONING` →
+**Apply** → click the row **`8,142 Cr`**.
+
+**SAY**
+> "Acme, revenue from services, eight thousand one hundred forty-two crore.
+> Opening it gives the verbatim quote, the document, the page, and confirmation
+> the quote was re-derived from that page exactly. FY24 is resolved to real
+> dates and the value normalized to a comparable base. Nothing becomes eligible
+> for reasoning until that chain resolves."
+
+---
+
+### 1:00 — 1:22 · Corroboration
+
+**DO** — Click **Relationships** → **Corroborates** chip → click the card header
+→ expand **Deterministic signals**.
+
+**SAY**
+> "This pair comes from two different documents. One says eighty-one thousand
+> four hundred fifteen million, the other eight thousand one hundred forty-two
+> crore. Different words, different scale — after normalization, the same
+> number, to six thousandths of a percent. Corroborated."
+
+---
+
+### 1:22 — 1:44 · A real contradiction
+
+**DO** — Click the **Contradicts** chip → open the card with the red left edge.
+
+**SAY**
+> "A genuine conflict. Profit after tax, same company, same period, same scope —
+> but five thousand million against eight thousand. Thirty-seven percent apart,
+> past the contradiction threshold. This one it will call a real disagreement."
+
+---
+
+### 1:44 — 2:12 · Context, not conflict  ← the key moment
+
+**DO** — Click **Different context** → open the card whose two values are
+**81,415.38** and **74,540.82** → expand **Why this call**.
+
+**SAY**
+> "And this is what the whole design exists for. These two differ by eight
+> percent, same company, same period. A naive system reports a contradiction.
+> But one figure is consolidated and the other is standalone. The system detects
+> that scope conflict, names the dimension, and classifies it as a context
+> difference — not a contradiction."
+
+---
+
+### 2:12 — 2:26 · Time
+
+**DO** — Click **Temporal evolution** → open the FY24-versus-FY23 card.
+
+**SAY**
+> "Same idea across time. Same measure, adjacent years, the value moved
+> twenty-six percent. That's a number that changed, not a disagreement."
+
+---
+
+### 2:26 — 2:44 · Knowing when to stop
+
+**DO** — Click **Uncertain** → open one card. Then click **Failures** in the
+sidebar.
+
+**SAY**
+> "It also refuses to guess. Revenue versus profit after tax — same company,
+> same period, but not the same measure, so it abstains. And here in Failures, a
+> fact whose quote could not be verified against the page is quarantined. It's
+> kept and inspectable, but it can never enter a relationship."
+
+---
+
+### 2:44 — 3:00 · Close
+
+**DO** — Click back to **Overview**.
+
+**SAY**
+> "So: deterministic core, the model only for genuine ambiguity, and the
+> deterministic layer always has the last word. Four hundred forty-seven tests,
+> no network needed. And beyond this fixture, a real twenty-seven page earnings
+> PDF ran end to end on live Gemini — fifty-three facts, fifty-one grounded."
+
+---
+
+## Notes for the recording
+
+- The demo corpus is a **labelled synthetic fixture** — it's the only corpus that
+  contains all five relationship categories, and saying so out loud is stronger
+  than implying it's real data.
+- If asked "is this real?": the real Delhivery PDF run is in the README under
+  *Validation status* — 27 pages, 53 facts, 51 grounded.
+- Optional 20-second add-on if you have room: **Documents** → upload a PDF →
+  **Process** → the row polls `processing → done | failed` and a failure names
+  its own reason. Needs `GEMINI_API_KEY` plus remaining daily quota.
+- Don't demo Uncertain counts on the real corpus — extraction quality on
+  boilerplate pages inflates them; the fix is in `extraction_v2.md` but hasn't
+  been re-measured yet.
