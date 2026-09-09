@@ -4,6 +4,10 @@ Read this straight through while you screen-record. The navigation is written
 into the narration — say the words, do the thing you're saying. Square brackets
 are silent cues, don't read them.
 
+**435 spoken words ≈ 2 min 55 s** at a normal pace. If you speak slowly and run
+long, drop the *Temporal evolution* beat at 1:58 — it's the one section the demo
+survives without.
+
 **Setup before recording**
 
 ```bash
@@ -23,9 +27,8 @@ every fact to the exact sentence it came from, then works out how facts across
 different documents relate. The hard part isn't extraction — it's that two
 documents can state the same thing with different numbers and both be right.
 
-The dashboard shows two documents, seven facts, fifteen relationships. And down
-here is the pipeline it ran through. The model only interprets meaning —
-verifying evidence, normalizing numbers, and making the final call are all
+Down here is the pipeline it ran through. The model only interprets meaning —
+verifying evidence, normalizing the numbers, and making the final call are all
 deterministic code.
 
 **[0:22 — click Facts, set Lifecycle to ELIGIBLE_FOR_REASONING, click Apply]**
@@ -37,11 +40,10 @@ Let me start with one fact. I'll filter to the ones eligible for reasoning —
 — and open this one. Acme, revenue from services, eight thousand one hundred
 forty-two crore.
 
-It opens to the verbatim quote it came from, the document, the page, and
-confirmation the quote was re-derived from that page exactly. FY24 is resolved
-into real dates, and the value normalized into a comparable base. Nothing
-becomes eligible until that chain resolves — if the quote can't be found on the
-page, the fact is quarantined instead.
+It opens to the verbatim quote, the document, the page, and confirmation the
+quote was re-derived from that page exactly. FY24 is resolved into real dates,
+the value normalized into a comparable base. Nothing becomes eligible until that
+chain resolves — if the quote isn't found, the fact is quarantined instead.
 
 **[0:50 — click Relationships, then the Corroborates chip, open the card]**
 
@@ -58,9 +60,9 @@ six thousandths of a percent.
 
 **[1:15 — click the Contradicts chip, open the red-edged card]**
 
-Contradictions next. A genuine conflict — profit after tax, same company, same
-period, same scope, but five thousand million against eight thousand. Thirty-
-seven percent apart, past the threshold. It'll call that a real disagreement.
+Contradictions next. Profit after tax, same company, same period, same scope,
+but five thousand million against eight thousand — thirty-seven percent apart,
+past the threshold. A real disagreement.
 
 **[1:33 — click Different context, open the card showing 81,415.38 and 74,540.82]**
 
@@ -89,11 +91,11 @@ relationship.
 
 **[2:40 — click back to Overview]**
 
-So: a deterministic core, the model only for genuine ambiguity, and deterministic
-code always gets the last word. Four hundred forty-seven tests, no network
-needed. This corpus is a labelled synthetic fixture — the one that exercises all
-five categories. Separately, a real twenty-seven page earnings PDF ran end to end
-on live Gemini: fifty-three facts, fifty-one grounded. Thanks for watching."
+So: deterministic core, the model only for genuine ambiguity, and deterministic
+code gets the last word. Four hundred forty-seven tests, no network needed. This
+corpus is a labelled synthetic fixture — the one that exercises all five
+categories. Separately, a real twenty-seven page earnings PDF ran end to end on
+live Gemini: fifty-three facts, fifty-one grounded. Thanks for watching."
 
 ---
 
