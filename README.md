@@ -162,6 +162,36 @@ cp .env.example .env                  # optional — every setting has a default
 
 Python **3.11+**. No database server, no Docker, no Node.
 
+### Starter documents (not in this repository)
+
+The six starter PDFs are **git-ignored** — they are ~20 MB of third-party
+material, and the repository keeps only their provenance. A fresh clone is fully
+usable without them: `python -m evaluation.harness` and `scripts/seed_demo.py`
+build their own synthetic corpus, and the test suite passes: verified on a clean
+clone with no PDFs and no `.env` — **436 passed, 5 skipped**. The five skips are
+the tests that ingest a real starter PDF (in `test_retrieve`, `test_normalize`,
+`test_entities`, `test_verify`, `test_reason`), each guarded with
+`pytest.skip("starter PDF not present")`.
+
+To reproduce the real-corpus runs described below, restore the tree:
+
+```
+starter-datasets/
+├── delhivery/                 3 company documents
+└── india-macroeconomy/        3 institutional reports
+```
+
+Either unzip the `starter-datasets.zip` supplied with the assignment, or
+re-download each file from the source links in the tracked provenance READMEs
+— [`starter-datasets/delhivery/README.md`](starter-datasets/delhivery/README.md)
+and
+[`starter-datasets/india-macroeconomy/README.md`](starter-datasets/india-macroeconomy/README.md)
+— which also record the exact page ranges kept in each curated excerpt. Filenames
+must match; the app addresses documents by content hash, so a re-downloaded full
+PDF ingests fine but is a *different* document from the curated excerpt.
+
+Any PDF works, though: upload your own from the **Documents** view.
+
 ### Environment variables
 
 All app settings use the `FKL_` prefix and have safe defaults in
