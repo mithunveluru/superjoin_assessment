@@ -138,7 +138,7 @@ their residual risks:
   changed verdict — a rule change needs a fresh `relationships` table. Persisting
   reasoning in place would need an upsert; deferred.
 - **Dependencies / API.** No new dependency. The engine and every deterministic
-  category work with no `ANTHROPIC_API_KEY`; the key only enables the semantic
+  category work with no `GEMINI_API_KEY`; the key only enables the semantic
   step for the residual ambiguous pairs.
 
 ## Evaluation harness — synthetic corpus here, real tuning deferred (Phase 10, done)
@@ -189,7 +189,7 @@ storage over FastAPI. Accepted positions and residual risks:
   beyond `MAX_UPLOAD_MB` / `MAX_PAGES`, and `/docs` is live. Noted in the README;
   a real deployment needs a reverse proxy + auth.
 - **Full run through HTTP needs a key.** `POST /documents/{id}/process` runs the
-  real pipeline; the `extract` stage needs `ANTHROPIC_API_KEY`. Without one the
+  real pipeline; the `extract` stage needs `GEMINI_API_KEY`. Without one the
   run is marked `failed` at `extract` and surfaced at HTTP 200 (by design) — but
   the "upload PDFs → inspect facts/relationships" flow is only *fully* exercised
   end-to-end with a key. The pipeline wiring and the failure path are unit-tested
@@ -218,7 +218,7 @@ storage over FastAPI. Accepted positions and residual risks:
 `app/static/{index.html, style.css, app.js}`, served by FastAPI. Accepted
 positions and residual risks:
 
-- **No dependency, no build, no bundler.** ~400 lines of vanilla `app.js` + ~160
+- **No dependency, no build, no bundler.** ~830 lines of vanilla `app.js` + ~420
   of CSS. The trade is no component model, no type checking on the client, and
   hand-rolled DOM building. Kept small on purpose (D3).
 - **Browser-code coverage.** `pytest` pins only the servable contract (page +
@@ -242,7 +242,7 @@ positions and residual risks:
 
 ## End-to-end validation — what was and was not run (Phase 13, done)
 
-- **No live extraction on the real corpus.** `ANTHROPIC_API_KEY` is not available
+- **No live extraction on the real corpus.** `GEMINI_API_KEY` is not available
   here, so the pipeline was run for real only through **ingestion** on all 3
   Delhivery PDFs (3 docs / 227 pages / 1006 chunks, offset invariant intact, 6
   `ocr_page` failures). Stages 4–9 were validated deterministically with a
@@ -337,7 +337,7 @@ classification. Known risks, each an accepted position for this phase:
 - **Dependencies / API.** No new dependency, no network, no API key. `rapidfuzz`
   was already present from Phase 5.
 - **Deterministic real-corpus smoke only.** As in Phases 4–7, meaningful
-  end-to-end validation needs `ANTHROPIC_API_KEY` for extraction. The Phase-8
+  end-to-end validation needs `GEMINI_API_KEY` for extraction. The Phase-8
   smoke (`scripts/smoke_retrieve.py`, and a scratchpad LLM-free harvest) proves
   retrieval is **bounded, blocked, cross-document and byte-identical on re-run**
   over real ingested page text; it does not prove the *usefulness* of the
@@ -402,7 +402,7 @@ Phase 4's structural pipeline (LLM call → deterministic validation → persist
 → provenance chain) is proven on real ingested chunks, but **extraction quality**
 — whether the model returns *meaningful atomic claims* rather than noise, and
 whether its `char_start`/`char_end` are actually correct — can only be checked
-with a live `ANTHROPIC_API_KEY` (`scripts/smoke_extract.py`), which was not
+with a live `GEMINI_API_KEY` (`scripts/smoke_extract.py`), which was not
 available here. Risks a live run must be watched for: over-extraction (every
 number becomes a "fact"), quotes/offsets that don't line up with the chunk (these
 are *rejected* structurally if offsets fall outside the chunk, but a model can

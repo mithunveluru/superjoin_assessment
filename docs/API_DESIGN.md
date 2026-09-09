@@ -46,14 +46,18 @@ Errors: `400 invalid_pdf`, `400 encrypted_pdf`, `413 file_too_large`,
 `404 document_not_found`.
 
 ### POST /documents/{id}/process  — run pipeline
-Idempotent-ish: if a run is `running`, returns that run with `202`. Otherwise
-starts a `BackgroundTask` and returns the new run.
+Idempotent: a `running` or `done` full run is returned as-is with `202`. A
+document that already holds facts without such a run (stage runs, or a seeded
+fixture) is **refused** with `409` — re-extracting would duplicate candidates
+and can turn a good document into a failed one. Otherwise starts a
+`BackgroundTask` and returns the new run.
 
 **202** →
 ```json
 { "run_id": 4, "document_id": 1, "status": "running", "stage": "ingest", "started_at": "…" }
 ```
-`404 document_not_found`, `409 already_processing` (only if a lock race loses).
+`404 document_not_found`, `409 already_processed` (the document already holds
+facts), `409 already_processing` (only if a lock race loses).
 
 ### GET /documents/{id}/status  — poll
 **200** →

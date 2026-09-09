@@ -124,7 +124,7 @@ app.main:app` serves the UI at `/`, OpenAPI docs at `/docs`.
 |---|---|
 | `POST /documents` | multipart PDF upload → ingest (SHA-256 dedup) |
 | `GET /documents` · `GET /documents/{id}` | list / detail (+ counts, latest run) |
-| `POST /documents/{id}/process` | run the pipeline as a background task (idempotent — a completed run is returned as-is) |
+| `POST /documents/{id}/process` | run the pipeline as a background task; idempotent — a completed run is returned as-is, and a document that already holds facts is refused with `409 already_processed` |
 | `GET /documents/{id}/status` | poll; a failed stage surfaces its error at HTTP 200 |
 | `GET /facts` · `GET /facts/{id}` | filter matrix (`type`, `lifecycle_state`, `evidence_status`, `modality`, `reasoning_eligible`, `q` FTS, …) + detail with quote, context window, relationships |
 | `GET /relationships` · `GET /relationships/{id}` | category / `context_dimension` / `validation_action` filters; detail with both full facts, the signals table, proposed-vs-final category |
@@ -134,8 +134,8 @@ app.main:app` serves the UI at `/`, OpenAPI docs at `/docs`.
 
 ## UI
 
-Served at `/` — one `index.html` + `style.css` + `app.js` (~400 lines vanilla,
-no framework, no build). Five views:
+Served at `/` — one `index.html` + `style.css` + `app.js` (~830 lines vanilla,
+no framework, no build). Six views:
 
 - **Documents** — upload, then **Process** with 2-second status polling.
 - **Facts** — the filter matrix + pagination; a row expands to the verbatim
@@ -166,7 +166,7 @@ Python **3.11+**. No database server, no Docker, no Node.
 
 All app settings use the `FKL_` prefix and have safe defaults in
 [`.env.example`](.env.example). The only real secret is the LLM API key, read
-from the variable named by `FKL_LLM_API_KEY_ENV` (default `ANTHROPIC_API_KEY`),
+from the variable named by `FKL_LLM_API_KEY_ENV` (default `GEMINI_API_KEY`),
 so it never carries a project-specific name and is never committed (`.env` is
 git-ignored). Groups: `FKL_LLM_*`, `FKL_DATABASE_PATH` / `FKL_UPLOADS_DIR`,
 `FKL_ENTITY_*` (two fuzzy thresholds), `FKL_RETRIEVAL_*` (top-k, thresholds,
@@ -184,10 +184,10 @@ curl -s localhost:8000/health | python -m json.tool
 On first start the app creates `data/knowledge.db` from `app/schema.sql` and
 applies the forward-only migrations in `app/db.py`.
 
-### Process a PDF (needs `ANTHROPIC_API_KEY` for the extract stage)
+### Process a PDF (needs `GEMINI_API_KEY` for the extract stage)
 
 ```bash
-export ANTHROPIC_API_KEY=...
+export GEMINI_API_KEY=...          # or put it in .env — the app reads both
 DOC=$(curl -s -F file=@starter-datasets/delhivery/03-delhivery-q4-fy24-earnings-presentation.pdf \
       localhost:8000/documents | python -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 curl -s -X POST localhost:8000/documents/$DOC/process        # 202, runs in the background
@@ -207,7 +207,7 @@ Sonnet-5 rates).
 ## Test & lint
 
 ```bash
-pytest                # 391 tests, ~25 s, no network, no API key
+pytest                # 441 tests, ~30 s, no network, no API key
 ruff check .
 ```
 
@@ -257,17 +257,44 @@ performed (see below).
   were validated against a live `uvicorn` server (a real Delhivery PDF uploaded;
   every read endpoint, every 404, the multipart upload, the failed-run path — no
   500s, no browser console errors, all five UI views).
-- **Not performed:** a **live LLM extraction run on the real Delhivery corpus**,
-  because `ANTHROPIC_API_KEY` was unavailable during development. **No
-  corpus-derived contradiction or corroboration is claimed** — the four scenarios
-  above are synthetic validation fixtures, labelled as such. Whether the Delhivery
-  documents contain a *naturally occurring* contradiction is an open question that
-  needs a keyed run.
+- **Live Gemini corpus run (performed):**
+  `03-delhivery-q4-fy24-earnings-presentation.pdf` processed end to end on
+  `gemini-2.5-flash`: 27 pages → 32 chunks → 32 LLM calls → 53 candidate facts,
+  **51 grounded** (quote re-derived from the source page), 2 quarantined, 84
+  relationships, no stage failure.
+- **Live Gemini smoke test (performed, post-migration):** authentication (an
+  invalid key returns `400 INVALID_ARGUMENT`, the real key `429` — i.e. it
+  authenticates), one real **extraction** call on `gemini-2.5-flash` → a valid
+  `LLMExtraction`, and one real **entity-confirmation** and one real
+  **relationship-confirmation** call → valid `EntityConfirmation` /
+  `RelationshipProposal` (`CORROBORATES`, 0.98). The two confirmer calls ran on
+  `gemini-3.6-flash` because the default model's free-tier budget was spent;
+  the code path is identical, only `FKL_LLM_MODEL` differs.
+- **Still not claimed:** any **corpus-derived contradiction or corroboration**.
+  That single-document run classified 83 of 84 pairs `UNCERTAIN` and 1
+  `DIFFERENT_CONTEXT` — the conservative guard working as designed on a deck
+  whose opening pages are exchange-filing boilerplate, not comparable measures.
+  The four scenarios above remain synthetic validation fixtures, labelled as
+  such. Whether the Delhivery documents contain a *naturally occurring*
+  contradiction still needs a multi-document keyed run.
 
 ## Known limitations
 
-- **No live extraction on the real corpus** (above). Every other stage is
+- **No cross-document live run on the real corpus** (above): one Delhivery
+  document has been extracted with a live provider, but no corpus-derived
+  relationship between two real documents is claimed. Every other stage is
   deterministic and was run for real.
+- **Free-tier quota bounds a real run.** Gemini's free tier allows
+  `GenerateRequestsPerDayPerProjectPerModel = 20` for `gemini-2.5-flash`, and
+  extraction costs one call per chunk (a 27-page deck is 32). A full corpus run
+  therefore needs a paid tier, or a per-model budget spread across models. This
+  is a quota limit, not a code limit: chunk-level 429s degrade to typed
+  `rate_limit` failures and the run continues.
+- **`FKL_MAX_LLM_CALLS_PER_DOC` covers extraction only.** The resolve and reason
+  stages call the LLM once per ambiguous entity surface / per deferred pair with
+  no ceiling. Bounded in practice by retrieval (`top_k × eligible facts`), but a
+  large document could issue many calls; cap those stages before an unattended
+  paid-tier run.
 - **`scope` is a free string** from extraction, stored as `{"raw": <string>}`, so
   a `DIFFERENT_CONTEXT` `context_dimension` reads `scope:raw` rather than naming
   the dimension (`basis` / `segment` / `geography`). It still distinguishes
@@ -309,9 +336,14 @@ performed (see below).
 - **Required** for: Phase-4 candidate extraction (`POST /process` on a real PDF),
   borderline entity-cluster confirmation, and the optional semantic
   relationship-proposal step.
-- Provider: Anthropic, model `claude-sonnet-5` (`FKL_LLM_MODEL`). The key is read
-  at call time from `os.environ[FKL_LLM_API_KEY_ENV]`; it is never logged, never
-  written to the database, and `.env` is git-ignored.
+- Provider: **Google Gemini**, model `gemini-2.5-flash` (`FKL_LLM_MODEL`). All
+  provider specifics live in one adapter (`_GeminiTransport` in `app/llm.py`);
+  prompts, JSON schemas, parsing and validation sit above it and never see a
+  Gemini object, so the rest of the application does not know which provider is
+  configured. The key is read at call time from `os.environ["GEMINI_API_KEY"]`,
+  falling back to that name in `.env`; it is never logged, never written to the
+  database, and `.env` is git-ignored. A missing key fails at client
+  construction, naming the variable to set.
 
 ## Design docs
 
@@ -339,7 +371,8 @@ app/
   ingest.py     Phase 2 — PDF → pages → chunks (offset-preserving)
   facts.py      Phase 3 — fact / evidence / relationship persistence + invariants
   extract.py    Phase 4 — candidate extraction (structured output → validation)
-  llm.py        Phase 4/7/9 — Anthropic clients (Extractor, EntityConfirmer, RelationshipConfirmer)
+  llm.py        Phase 4/7/9 — LLM clients (Extractor, EntityConfirmer, RelationshipConfirmer)
+                              over the Gemini transport adapter
   verify.py     Phase 5 — deterministic evidence verification + quarantine
   normalize.py  Phase 6 — number / currency / unit / period normalization
   entities.py   Phase 7 — entity resolution (generic rules + borderline LLM confirm)

@@ -50,7 +50,7 @@ No spec names an entity, a figure, or a filename.
 
 | Area | File | Asserts |
 |---|---|---|
-| Config | `test_config.py` | defaults; `FKL_*` env override; `llm_api_key()` reflects `ANTHROPIC_API_KEY` |
+| Config | `test_config.py` | defaults; `FKL_*` env override; `llm_api_key()` reflects `GEMINI_API_KEY` |
 | DB / schema | `test_db.py` | all tables + indexes present; `init_db` idempotent; `foreign_keys`/`journal_mode` pragmas; FK + every documented `CHECK` (lifecycle vocab, `fact_a_id<fact_b_id`, the two cross-column fact invariants) raise; insert/read round-trip; `transaction()` rollback |
 | Ingestion (Ph2) | `test_ingest.py` | `pages` count == PyMuPDF page count per starter PDF; offset round-trip via owning chunk; no chunk crosses a page; provenance fields populated where present; reject non-PDF/oversize/encrypted; sha256 dedup |
 | Fact/evidence store (Ph3) | `test_facts_store.py` | numeric + semantic round-trip incl. every numeric-representation column + JSON; `facts_fts` findable after insert; `quarantine()` sets state + `reasoning_eligible=0` + writes `failures`; helpers reject invariant violations |

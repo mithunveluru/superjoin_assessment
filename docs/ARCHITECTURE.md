@@ -466,7 +466,7 @@ guess.
 
 ## 9. Security & configuration
 
-- **Secrets:** `ANTHROPIC_API_KEY` only, read from env. `.env` git-ignored;
+- **Secrets:** `GEMINI_API_KEY` only, read from env. `.env` git-ignored;
   `.env.example` committed with placeholders. No key in code, logs, or the DB.
 - **Upload validation:** MIME + magic-byte check (`%PDF-`), extension check,
   `MAX_UPLOAD_MB` (default 25), page-count cap (`MAX_PAGES`, default 300),

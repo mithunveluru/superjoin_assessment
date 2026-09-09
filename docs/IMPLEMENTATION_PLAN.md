@@ -34,8 +34,8 @@ so retrieval/threshold tuning is evidence‑driven.
 ## Stack (locked)
 
 Python 3.11+, FastAPI + Uvicorn, SQLite (`sqlite3` stdlib), **PyMuPDF**
-(imported as `pymupdf`) for PDF, `fastembed` (local ONNX embeddings), `rapidfuzz`, `anthropic`
-SDK (`claude-sonnet-5`; no sampling params — Sonnet 5 rejects them), `pytesseract`+`pdf2image` (OCR fallback
+(imported as `pymupdf`) for PDF, `fastembed` (local ONNX embeddings), `rapidfuzz`, `google-genai`
+SDK (`gemini-2.5-flash`, structured output via `response_schema`), `pytesseract`+`pdf2image` (OCR fallback
 only), `numpy`, `pydantic` + `pydantic-settings`. Dev: `pytest`, `httpx`, `ruff`.
 Dependencies are added **in the phase that first imports them**, not up front.
 
@@ -60,7 +60,7 @@ app/
   retrieve.py      # Phase 8
   signals.py       # Phase 8  (deterministic comparison)
   reason.py        # Phase 9  (LLM proposes; signals.validate() decides)
-  llm.py           # Phase 4 — Anthropic wrappers (AnthropicExtractor, AnthropicEntityConfirmer)
+  llm.py           # Phase 4/7/9 — Gemini transport + Extractor / EntityConfirmer / RelationshipConfirmer
   prompts/         # versioned prompts (extraction_v1.md, entity_confirm_v1.md)
   pipeline.py      # Phase 11 orchestration
 static/            # Phase 12
@@ -116,7 +116,7 @@ foundational tests. **No pipeline logic.**
    model, api_key_present}}`.
 5. `requirements.txt` — Phase‑1 deps only: fastapi, uvicorn[standard], pydantic,
    pydantic‑settings, python‑dotenv, httpx, pytest, ruff.
-6. `.env.example` — every `FKL_*` with its default + `ANTHROPIC_API_KEY=` blank.
+6. `.env.example` — every `FKL_*` with its default + `GEMINI_API_KEY=` blank.
 7. `.gitignore` — `.env`, `data/`, `uploads/`, `__pycache__/`, `*.db*`,
    `.pytest_cache/`, `.ruff_cache/`, `.venv/`.
 8. `README.md` — Phase‑1 scope note, prerequisites, install, run, test,
@@ -135,13 +135,13 @@ foundational tests. **No pipeline logic.**
 - FK violation and every documented `CHECK` (lifecycle vocab, relationship pair
   order, the two cross‑column fact invariants) raise `sqlite3.IntegrityError`.
 - Config loads defaults; a `FKL_*` env var overrides; `llm_api_key()` reflects
-  `ANTHROPIC_API_KEY`.
+  `GEMINI_API_KEY`.
 - No secret committed; `.env` git‑ignored.
 
 **Tests:**
 - `test_config`: defaults (`llm_model=="claude-sonnet-5"`,
   `llm_temperature==0.0`); `monkeypatch.setenv("FKL_RETRIEVAL_TOP_K","3")` +
-  `get_settings.cache_clear()` ⇒ `retrieval_top_k==3`; `ANTHROPIC_API_KEY`
+  `get_settings.cache_clear()` ⇒ `retrieval_top_k==3`; `GEMINI_API_KEY`
   set/unset ⇒ `llm_api_key()` value/None.
 - `test_db`: expected table set == `sqlite_master`; `init_db()` twice OK;
   `foreign_keys` & `journal_mode` pragmas; FK violation raises; bad
@@ -240,14 +240,14 @@ verbatim LLM response and every rejected candidate preserved; facts persisted at
 Extraction only — no evidence verification, normalization, entity resolution, or
 inference.
 **Files shipped:** `app/prompts/extraction_v1.md` (versioned, corpus-agnostic
-prompt); `app/llm.py` (`AnthropicExtractor` — lazy SDK import,
+prompt); `app/llm.py` (`Extractor` — lazy SDK import,
 `output_config.format` json_schema, no sampling params (Sonnet 5), SDK error
 chain → typed `LLMExtraction`); `app/extract.py` (`extract_document`, deterministic
 `_validate_candidate`, `_candidate_to_fact_in`, `extraction_summary`,
 `ExtractError`); `app/models.py` (`RawCandidate` / `RawExtraction` /
 `LLMExtraction` / `ExtractionRunResult`); `app/config.py` (llm effort / max_tokens
 / timeout); `tests/fakes.py` (`FakeLLM`); `tests/test_extract.py` (32 tests);
-`scripts/smoke_extract.py`. `anthropic>=1.4` added.
+`scripts/smoke_extract.py`. `google-genai>=1.0` added.
 **How it works:** open an `extract` `runs` row → for each chunk (ordered by
 page_index, seq): call the client → **always** write a `raw_extractions` row (raw
 response + `stop_reason` + `parse_error`/`item_count`) → API / timeout / refusal /
@@ -273,7 +273,7 @@ malformed JSON, truncation, API errors, client exceptions, and per-candidate
 validation failures are each recorded and isolated; `extraction_summary` reports
 chunks / generated / persisted / rejected / errors / by-type / by-document.
 Structural smoke on 2 real starter PDFs (259 chunks): 0 broken chains, 0
-mis-stated lifecycle. **Live-LLM extraction quality requires `ANTHROPIC_API_KEY`**
+mis-stated lifecycle. **Live-LLM extraction quality requires `GEMINI_API_KEY`**
 (`scripts/smoke_extract.py`) — not run in this environment.
 **Gate:** candidate facts from real chunks with preserved provenance + raw
 output; nothing reasoning-eligible. **Met.**
@@ -385,7 +385,7 @@ schema unchanged (`user_version` stays 3). **Met.**
 global `entities` table: deterministic normalization → blocking → auto‑merge or
 borderline‑only LLM confirmation. No dataset‑specific aliases anywhere in `app/`.
 **Files shipped:** `app/entities.py`, `app/prompts/entity_confirm_v1.md`,
-`AnthropicEntityConfirmer` in `app/llm.py`, `tests/test_entities.py` (26 tests).
+`EntityConfirmer` in `app/llm.py`, `tests/test_entities.py` (26 tests).
 No migration — `entities` / `entity_aliases` / `facts.subject_entity_id` are all
 in the genesis schema (`user_version` stays 3). No new dependency (`rapidfuzz`
 already present; **no embeddings** — see deviation).
@@ -516,7 +516,7 @@ logic first and final**; the LLM is an *optional proposer* for genuinely semanti
 questions and its proposal is always re‑checked deterministically.
 **Files shipped:** `app/reason.py` (`reason_pair`, `reason_document`,
 `deterministic_verdict`, `_validate_llm`, `_confidence`, `reasoning_summary`,
-`ReasonError`), `app/llm.py` (`AnthropicRelationshipConfirmer`,
+`ReasonError`), `app/llm.py` (`RelationshipConfirmer`,
 `classify_relationship`), `app/prompts/relationship_v1.md`, `app/models.py`
 (`RelationshipProposal`, `RelationshipDecision`, `DocReasoningSummary`,
 `ValidationAction`), `app/config.py` (`relationship_prompt_version`),
@@ -647,7 +647,7 @@ migration, no new dependency.
 - `--db <path>` — evaluate an already‑processed database, no pipeline run.
 - `--corpus <dir>` — run the real ingest→extract→verify→normalize→resolve→reason
   pipeline over a directory of PDFs; exits with a clear message if
-  `ANTHROPIC_API_KEY` is unset (extraction needs it). Not exercised in this
+  `GEMINI_API_KEY` is unset (extraction needs it). Not exercised in this
   environment — same key constraint as Phases 4–9.
 
 **Properties (structural, generalise to any corpus).**
@@ -760,7 +760,7 @@ relationships / entities; a keyless `POST /documents/{id}/process` → 202 then
 `GET /status` shows `run.status="failed"` + `run.error` at HTTP 200;
 `pipeline.run` with an empty fake extractor completes `done`, with a raising
 extractor stops `failed` at `extract`. A **full run over the real corpora
-through HTTP** needs `ANTHROPIC_API_KEY` for extraction — same constraint as
+through HTTP** needs `GEMINI_API_KEY` for extraction — same constraint as
 Phases 4-10; the pipeline path is wired and unit-tested with fakes.
 **Gate:** "upload PDFs and inspect results" is satisfiable through the API.
 **Met.** 380 tests pass, ruff clean.
@@ -828,7 +828,7 @@ the Relationships view + the Failures view render whatever the pipeline produced
 quality, validate the API and UI against a real server, fix any real bug found,
 and leave a reproducible demo. **No architecture changes.**
 
-**LLM blocker (unchanged from Phases 4–12).** `ANTHROPIC_API_KEY` is not
+**LLM blocker (unchanged from Phases 4–12).** `GEMINI_API_KEY` is not
 available in this environment, so a **live** extraction run on the Delhivery
 corpus cannot be performed. Everything that does not need the LLM was run for
 real; the LLM-dependent stages were validated deterministically with a
@@ -964,13 +964,14 @@ Regression test: `tests/test_api.py::test_process_is_idempotent_after_completion
 **Secret / hygiene audit.** `git ls-files` carries no `.env`, no `*.db`, no
 credentials; `git grep` for secret patterns (`sk-ant-`, `AIza…`, PEM headers,
 `xox…`, `ghp_…`) over tracked files is empty. `.env` is git-ignored and holds
-only a local **unrelated** non-Anthropic key that the app never reads (only
-`ANTHROPIC_API_KEY` + `FKL_*`). `.env.example` is placeholders only. `.gitignore`
+only `GEMINI_API_KEY`, which the app reads at call time and never logs. `.env.example` is placeholders only. `.gitignore`
 covers `data/`, `uploads/`, `*.db*`, `.venv/`, caches, `node_modules/`,
 `.env`/`.env.*` (except `.env.example`).
 
-**Real LLM validation:** **not performed** — no legitimate `ANTHROPIC_API_KEY`
-available. Not substituted, not worked around; the documented limitation stands.
+**Real LLM validation:** performed against live Gemini after the provider
+migration — see README → *Validation status* for exactly what was and was not
+exercised. Nothing was substituted or worked around; the remaining limitation
+(free-tier quota of 20 requests/day/model) is documented, not hidden.
 
 **Final testing.** `391 passed` (390 → +1 regression test), ruff clean,
 `node --check app/static/app.js` OK, headless jsdom UI drive against live

@@ -3,8 +3,9 @@
 Everything below is real functionality in this repo. The relationship examples
 come from **`scripts/seed_demo.py`**, a deterministic **synthetic** two-document
 fixture (entity `Acme`) — it is a *validation fixture*, not corpus-derived data.
-A live LLM extraction run on the real Delhivery corpus was not performed
-(no `ANTHROPIC_API_KEY` during development); see README → *Validation status*.
+A live Gemini extraction run on one real Delhivery PDF **was** performed
+(27 pages → 53 facts, 51 grounded); no cross-document relationship between two
+*real* documents is claimed. See README → *Validation status*.
 
 ## Setup (once, off camera)
 
@@ -38,9 +39,10 @@ The demo DB has 2 synthetic documents, 1 resolved entity, 7 facts (6 verified,
   `starter-datasets/delhivery/03-delhivery-q4-fy24-earnings-presentation.pdf`
   → **Upload PDF**.
 - Point at the new row: status `ingested`, page count (27), the counts columns.
-- Click **Process**. Narrate: *"this runs the pipeline in the background; with no
-  API key the extract stage fails and the row shows `failed` at the `extract`
-  stage — the failure path is honest, not hidden."* (Status polls every 2 s.)
+- Click **Process**. Narrate: *"this runs the pipeline in the background against
+  Gemini; without a key — or once the free-tier budget is spent — the extract
+  stage fails and the row shows `failed` with the reason inline. The failure
+  path is honest, not hidden."* (Status polls every 2 s.)
 - Switch to the pre-seeded synthetic documents for the rest — *"these two are the
   labelled synthetic fixture so the reasoning views have data."*
 
@@ -99,7 +101,7 @@ The demo DB has 2 synthetic documents, 1 resolved entity, 7 facts (6 verified,
 - *"Deterministic core, LLM only for genuine semantic ambiguity, and the
   deterministic layer always has the final say — an LLM `CONTRADICTS` on
   equal-after-normalization numbers is overridden to `CORROBORATES`."*
-- *"391 tests, ruff clean, no network. Real Delhivery PDFs are ingested and
-  validated; the reasoning demo uses a labelled synthetic fixture because a live
-  extraction key wasn't available. Limitations and next steps are in
-  `docs/RISKS.md`."*
+- *"441 tests, ruff clean, no network. A real Delhivery PDF was extracted with
+  live Gemini (53 facts, 51 grounded); the reasoning demo uses a labelled
+  synthetic fixture so all five categories are present. Limitations and next
+  steps are in `docs/RISKS.md`."*

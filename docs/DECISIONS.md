@@ -36,8 +36,8 @@ reviewer.
 **Rejected:** Next.js / React / Vite (toolchain tax); server-side templating with
 Jinja (fine, but plain JSON+fetch is even less to own).
 **As built (Phase 12):** `app/static/{index.html, style.css (~160 lines, CSS
-vars, system font), app.js (~400 lines vanilla)}` — a hash router over five
-views (Documents / Facts / Relationships / Failures / Entities), a ~15-line
+vars, system font), app.js (~830 lines vanilla)}` — a hash router over six
+views (Overview / Documents / Facts / Relationships / Entities / Failures), a ~15-line
 `el()` DOM builder, an `api()` fetch wrapper that raises the
 `{error:{code,message}}` body, and 2-second polling of
 `GET /documents/{id}/status` after a Process click. `GET /` serves the page with
@@ -64,27 +64,35 @@ would block the request for minutes).
 **Revisit when:** many concurrent uploads or multi-minute PDFs — move `pipeline.run`
 behind a worker; `runs` table already models async state.
 
-## D5 — Claude for extraction & relationship reasoning; local model for embeddings
+## D5 — Gemini for extraction & relationship reasoning; local model for embeddings
 
-**Decision:** `anthropic` SDK, `claude-sonnet-5` for `extract_facts`,
+**Decision:** `google-genai` SDK, `gemini-2.5-flash` for `extract_facts`,
 `confirm_entities`, `classify_relationship`. Embeddings from `fastembed`
 (`BAAI/bge-small-en-v1.5`, ONNX, CPU, offline).
-**Why:** Sonnet 5 has a 1M context, strong structured-output support, and is
-~1/2.5 the price of Opus per token ($2/$10 vs $5/$25 per MTok) — the extraction
-workload is high-volume and schema-bounded, so the cheaper capable model is the
-right default for a cost-sensitive prototype. Anthropic has no first-party
-embeddings endpoint; a local ONNX model keeps the API-key surface to exactly one
-secret and costs nothing per call.
-**Rejected:** Opus 5 as the default (better, but the per-token cost isn't
-justified for bulk structured extraction — it's the documented upgrade if
+**Why:** the extraction workload is high-volume and schema-bounded, so a cheap
+capable model with first-class structured output is the right default for a
+cost-sensitive prototype. Gemini enforces a response schema server-side
+(`response_schema`), which is exactly the guarantee this pipeline needs — the
+deterministic validator in `app/extract.py` is still the real gate, but a
+schema-shaped response makes malformed output rare rather than routine. A local
+ONNX embedding model keeps the API-key surface to exactly one secret and costs
+nothing per call.
+**Rejected:** a larger Gemini model as the default (better, but the per-token
+cost isn't justified for bulk structured extraction — the documented upgrade if
 extraction quality is measured short); OpenAI/Voyage for embeddings (a second
 API key and vendor for no benefit at this scale); a full `sentence-transformers`
 model (drags in torch — `fastembed` is ONNX, ~50 MB).
-**Revisit when:** extraction accuracy on the eval harness is the bottleneck → try
-`claude-opus-5` for `extract_facts` only; or Haiku 4.5 for cost if volume grows.
-Model id is a config value.
-**Note:** all LLM calls go through `app/llm.py` (3 functions). Swapping provider
-or model touches that one file.
+**Revisit when:** extraction accuracy on the eval harness is the bottleneck →
+try a larger Gemini model for `extract_facts` only. Model id is a config value
+(`FKL_LLM_MODEL`).
+**Superseded decision:** this project originally used the `anthropic` SDK with
+`claude-sonnet-5`. It was migrated to Gemini wholesale; the Anthropic dependency,
+transport and configuration were removed rather than kept as a second provider,
+because one provider with one code path is cheaper to reason about than a
+provider matrix nobody exercises.
+**Note:** every LLM call goes through one adapter, `_GeminiTransport` in
+`app/llm.py`. Nothing above it handles a provider object, so swapping provider
+means writing one class and changing one line in `_new_transport`.
 
 ## D6 — Fact = CLAIM + CONTEXT + EVIDENCE, one schema for numeric & semantic
 
@@ -398,7 +406,7 @@ compatible — no migration). Every `UNCERTAIN` also writes a
 `failures(relationship_uncertain)` row so `GET /failures` (Phase 11) surfaces the
 non-decisions. A relationship is only ever written between two
 `ELIGIBLE_FOR_REASONING` facts (guard in `reason_pair` and in `add_relationship`).
-**LLM contract.** `AnthropicRelationshipConfirmer.classify_relationship` receives
+**LLM contract.** `RelationshipConfirmer.classify_relationship` receives
 a minimal structured packet (the two facts' fields + evidence quotes + the signal
 set — never the corpus), returns strict json-schema output, and is explicitly
 instructed not to invent values/periods/units/scope, not to override evidence or
@@ -426,7 +434,7 @@ The four `evaluation/cases/**/*.json` files are thin specs
 predicate; the machine logic lives in code, not in the spec. A **synthetic
 offline corpus** (`evaluation/corpora/synthetic.py`, ~7 seeded facts, no LLM)
 makes the harness and its honesty guards runnable and `pytest`-validated in an
-environment with no `ANTHROPIC_API_KEY`. A **curated config sweep** (a handful of
+environment with no `GEMINI_API_KEY`. A **curated config sweep** (a handful of
 named configs, not a full cartesian product) re-runs reasoning per config and
 prints a property-pass table.
 **Why:**
