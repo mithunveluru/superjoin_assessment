@@ -56,7 +56,10 @@ class Settings(BaseSettings):
     # model's list price (defaults are gemini-2.5-flash rates).
     llm_input_cost_per_token: float = 0.3e-6
     llm_output_cost_per_token: float = 2.5e-6
-    prompt_version: str = "v1"       # extraction prompt version (app/prompts/extraction_<v>.md)
+    # v2 tightened the subject rule (entity, not the sentence's grammatical
+    # subject) and excludes document-boilerplate claims; v1 is kept so existing
+    # facts' repro.prompt_version still identifies what actually produced them.
+    prompt_version: str = "v2"       # extraction prompt version (app/prompts/extraction_<v>.md)
     relationship_prompt_version: str = "v1"  # app/prompts/relationship_<v>.md (Phase 9)
 
     # --- embeddings (used from Phase 8) --------------------------------------

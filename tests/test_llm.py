@@ -229,3 +229,25 @@ def test_network_failures_become_typed_replies_not_exceptions(fake_key, monkeypa
     reply = t.complete(system="s", user="u", schema={"type": "object"}, max_tokens=16)
     assert reply.error_code == expected_code
     assert reply.text is None
+
+
+# --------------------------------------------------------------------------- #
+# prompt versions                                                            #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_every_shipped_extraction_prompt_loads(version):
+    from app.llm import load_prompt
+
+    text = load_prompt(version)
+    assert "facts" in text and "char_start" in text
+
+
+def test_default_prompt_version_exists_and_pins_the_subject_rule():
+    """v2 is the default; the subject rule is what it exists to fix."""
+    from app.llm import load_prompt
+
+    s = Settings(_env_file=None)
+    assert s.prompt_version == "v2"
+    text = load_prompt(s.prompt_version)
+    assert "grammatical subject" in text          # subject != sentence subject
+    assert "document artifact" in text            # boilerplate subjects excluded
