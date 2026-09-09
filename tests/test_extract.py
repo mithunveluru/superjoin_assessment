@@ -1,6 +1,6 @@
 """Phase 4 — candidate fact extraction.
 
-Uses a deterministic FakeLLM (tests/fakes.py); no Anthropic API calls. Covers the
+Uses a deterministic FakeLLM (tests/fakes.py); no Gemini API calls. Covers the
 structured-output contract, deterministic candidate validation, persistence as
 non-eligible CANDIDATE facts, raw-payload/run-metadata preservation, the
 FACT->EVIDENCE->CHUNK->PAGE->DOCUMENT provenance chain, failure isolation, and
@@ -207,7 +207,7 @@ def test_raw_payload_and_run_metadata_preserved(conn, db_path, make_source):
     assert run["status"] == "done"
     assert run["model_name"] == "fake-sonnet"
     assert json.loads(run["prompt_versions"]) == {"extract": "test-v1"}
-    assert "effort" in json.loads(run["settings"])
+    assert "temperature" in json.loads(run["settings"])
     assert run["facts_extracted"] == 1
     assert run["chunks_processed"] == 1
     assert run["llm_calls"] == 1
@@ -333,6 +333,23 @@ def test_document_not_ingested(conn, db_path, make_source):
     assert ei.value.code == "document_not_ingested"
 
 
+def test_missing_api_key_fails_fast_naming_the_variable(conn, db_path, make_source,
+                                                        monkeypatch):
+    """No key must fail at client construction, not once per chunk mid-run."""
+    from app.config import get_settings
+    from app.llm import LLMConfigError
+
+    # a name nothing sets, so the assertion holds whatever is in the real .env
+    monkeypatch.setenv("FKL_LLM_API_KEY_ENV", "FKL_TEST_ABSENT_KEY")
+    monkeypatch.delenv("FKL_TEST_ABSENT_KEY", raising=False)
+    get_settings.cache_clear()
+    src = _one_page_doc(make_source)
+    with pytest.raises(LLMConfigError) as ei:
+        extract_document(src["document_id"])  # no client injected -> builds a real one
+    assert "FKL_TEST_ABSENT_KEY" in str(ei.value)
+    assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 0
+
+
 # --------------------------------------------------------------------------- #
 # observability                                                              #
 # --------------------------------------------------------------------------- #
@@ -355,3 +372,23 @@ def test_extraction_summary(conn, db_path, make_source):
     assert summ["facts_by_type"] == {"semantic": 1, "numeric": 1}
     assert summ["facts_by_document"] == {src["document_id"]: 2}
     assert res.candidates_persisted == 2
+
+
+def test_max_llm_calls_per_doc_caps_extraction(conn, db_path, make_source, monkeypatch):
+    """The per-document LLM call budget stops extraction and records why."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("FKL_MAX_LLM_CALLS_PER_DOC", "2")
+    get_settings.cache_clear()
+    src = make_source([f"Acme reported {n} units in FY24." for n in range(5)])
+    client = FakeLLM()
+    res = extract_document(src["document_id"], client=client)
+
+    assert len(client.calls) == 2, "extraction must stop at the configured budget"
+    assert res.chunks_processed == 2
+    capped = conn.execute(
+        "SELECT reason, detail FROM failures WHERE failure_type = 'run_error' "
+        "AND reason = 'max_llm_calls_per_doc'"
+    ).fetchall()
+    assert len(capped) == 1
+    assert '"limit": 2' in capped[0]["detail"]

@@ -74,7 +74,7 @@ DOC_B_PAGES = ["Acme FY24 revenue from services was INR 8142 Cr for the full yea
 
 
 class SubstringExtractor:
-    """Same surface as app.llm.AnthropicExtractor. For each chunk, emit a
+    """Same surface as app.llm.Extractor. For each chunk, emit a
     candidate per MARKER found verbatim in the chunk, plus one fabricated-quote
     candidate on the 'permanent employees' page (to exercise the quarantine)."""
 
@@ -235,3 +235,87 @@ def test_evidence_offsets_match_the_quote(e2e):
     for r in rows:
         assert r["text"][r["char_start"]:r["char_end"]] == r["quote"]
     conn.close()
+
+
+def test_chunk_error_reasons_names_the_dominant_cause(db_path):
+    """A failed extract stage must say *why*, not just how many chunks broke."""
+    from app.pipeline import _chunk_error_reasons
+
+    db.init_db(db_path)
+    conn = db.connect(db_path)
+    with db.transaction(conn):
+        conn.execute("INSERT INTO documents (sha256, stored_path, status, uploaded_at) "
+                     "VALUES ('x', 'p', 'ingested', '2026-01-01T00:00:00Z')")
+        conn.execute("INSERT INTO runs (document_id, run_type, status, started_at) "
+                     "VALUES (1, 'full', 'running', '2026-01-01T00:00:00Z')")
+        for reason in ["rate_limit"] * 3 + ["api_error"]:
+            conn.execute(
+                "INSERT INTO failures (run_id, document_id, failure_type, reason, created_at) "
+                "VALUES (1, 1, 'run_error', ?, '2026-01-01T00:00:00Z')", (reason,),
+            )
+    assert _chunk_error_reasons(conn, 1) == "rate_limit x3, api_error x1"
+    assert _chunk_error_reasons(conn, 999) == "no reason recorded"
+    conn.close()
+
+
+def test_pipeline_wires_the_llm_confirmers_when_a_key_is_present(db_path, make_pdf, monkeypatch):
+    """Phase 7/9 semantic steps must actually reach the LLM.
+
+    Regression guard: the pipeline used to construct only the Extractor, so
+    resolve/reason always ran with ``llm=None`` — every pair the deterministic
+    layer deferred became UNCERTAIN 'no semantic confirmer available'.
+    """
+    from app.config import get_settings
+    from app.ingest import ingest_pdf
+
+    monkeypatch.setenv("FKL_LLM_API_KEY_ENV", "FKL_TEST_KEY")
+    monkeypatch.setenv("FKL_TEST_KEY", "not-a-real-key")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr("app.llm.EntityConfirmer", lambda s: "ENTITY_LLM")
+    monkeypatch.setattr("app.llm.RelationshipConfirmer", lambda s: "RELATIONSHIP_LLM")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("app.entities.resolve_document",
+                        lambda doc, **kw: seen.update(entity=kw.get("llm")))
+    monkeypatch.setattr("app.reason.reason_document",
+                        lambda doc, **kw: seen.update(relationship=kw.get("llm")))
+
+    db.init_db(db_path)
+    doc_id = ingest_pdf(str(make_pdf(DOC_B_PAGES, name="wiring.pdf")),
+                        database_path=db_path).document_id
+    conn = db.connect(db_path)
+    with db.transaction(conn):
+        run_id = pipeline_start(conn, doc_id, settings=get_settings())
+    conn.close()
+    pipeline_run(doc_id, run_id, database_path=db_path, settings=get_settings(),
+                 extractor=SubstringExtractor())
+
+    assert seen.get("entity") == "ENTITY_LLM", "resolve stage ran without the LLM confirmer"
+    assert seen.get("relationship") == "RELATIONSHIP_LLM", \
+        "reason stage ran without the LLM confirmer"
+
+
+def test_failed_extraction_message_names_the_real_reason(db_path, make_pdf):
+    """End-to-end: the stage error must carry the chunk failure reason, which
+    lives on the *extract* run, not the enclosing full run."""
+    from app.config import get_settings
+    from app.ingest import ingest_pdf
+    from tests.fakes import FakeLLM, api_error
+
+    db.init_db(db_path)
+    doc = ingest_pdf(str(make_pdf(["Acme reported revenue for FY24."], name="boom.pdf")),
+                     database_path=db_path).document_id
+    conn = db.connect(db_path)
+    with db.transaction(conn):
+        rid = pipeline_start(conn, doc, settings=get_settings())
+    conn.close()
+
+    pipeline_run(doc, rid, database_path=db_path, settings=get_settings(),
+                 extractor=FakeLLM([api_error("rate_limit", "429 quota")]))
+
+    conn = db.connect(db_path)
+    detail = conn.execute("SELECT status_detail FROM documents WHERE id = ?", (doc,)).fetchone()[0]
+    conn.close()
+    assert "chunk error(s)" in detail
+    assert "no reason recorded" not in detail, detail
+    assert "rate_limit" in detail, detail

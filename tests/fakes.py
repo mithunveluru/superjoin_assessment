@@ -16,7 +16,7 @@ from app.models import (
 
 
 class FakeLLM:
-    """Same surface as ``app.llm.AnthropicExtractor``: ``.model``,
+    """Same surface as ``app.llm.Extractor``: ``.model``,
     ``.prompt_version``, ``.extract(chunk_text, doc_header) -> LLMExtraction``.
 
     ``script`` is a list consumed one item per ``extract`` call:
@@ -75,7 +75,7 @@ def candidate(**over: Any) -> dict:
 
 
 class FakeEntityConfirmer:
-    """Same surface as ``app.llm.AnthropicEntityConfirmer``:
+    """Same surface as ``app.llm.EntityConfirmer``:
     ``.confirm_entities(surfaces, context) -> EntityConfirmation``.
 
     ``script`` is consumed one item per call:
@@ -110,7 +110,7 @@ def api_error(code: str = "api_error", detail: str = "boom") -> LLMExtraction:
 
 
 class FakeRelationshipConfirmer:
-    """Same surface as ``app.llm.AnthropicRelationshipConfirmer``:
+    """Same surface as ``app.llm.RelationshipConfirmer``:
     ``.classify_relationship(packet) -> RelationshipProposal``.
 
     ``script`` is consumed one item per call:

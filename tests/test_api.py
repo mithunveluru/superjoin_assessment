@@ -198,7 +198,10 @@ def test_upload_pdf_with_bad_magic_bytes_400(api):
 
 
 def test_process_without_key_surfaces_failed_run_at_200(api, make_pdf, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # point at a variable nothing sets: no key from the environment *or* .env,
+    # so the run fails at extract instead of calling a live provider
+    monkeypatch.setenv("FKL_LLM_API_KEY_ENV", "FKL_TEST_ABSENT_KEY")
+    monkeypatch.delenv("FKL_TEST_ABSENT_KEY", raising=False)
     get_settings.cache_clear()
     up = api.post("/documents", files={"file": ("d.pdf", _pdf_bytes(make_pdf), "application/pdf")})
     doc_id = up.json()["id"]
@@ -219,6 +222,40 @@ def test_process_without_key_surfaces_failed_run_at_200(api, make_pdf, monkeypat
 
 def test_process_unknown_document_404(api):
     assert api.post("/documents/999/process").status_code == 404
+
+
+def test_process_refuses_a_document_that_already_holds_facts(db_path, make_pdf):
+    """Facts without a *full* run behind them (stage runs, or a seeded fixture)
+    must still block re-processing: it would duplicate candidates and can flip a
+    good document to 'failed'."""
+    from app import db
+    from app.facts import insert_fact
+    from app.ingest import ingest_pdf
+    from app.models import FactIn
+
+    db.init_db(db_path)
+    doc_id = ingest_pdf(str(make_pdf(["Acme filed its report for FY24."])),
+                        database_path=db_path).document_id
+    conn = db.connect(db_path)
+    with db.transaction(conn):
+        insert_fact(conn, FactIn(
+            document_id=doc_id, page_index=0, subject_raw="Acme", predicate="revenue",
+            object_raw="1 crore", fact_type="numeric", value_raw="1 crore",
+        ))
+    conn.close()
+
+    get_settings.cache_clear()
+    with TestClient(app) as client:
+        resp = client.post(f"/documents/{doc_id}/process")
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "already_processed"
+
+    conn = db.connect(db_path)
+    started = conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE document_id = ? AND run_type = 'full'", (doc_id,)
+    ).fetchone()[0]
+    conn.close()
+    assert started == 0, "refused request must not start a pipeline run"
 
 
 def test_process_is_idempotent_after_completion(db_path, make_pdf):
@@ -311,3 +348,63 @@ def test_pipeline_run_marks_failed_when_a_stage_raises(db_path, make_pdf):
     conn.close()
     assert run["status"] == "failed" and run["stage"] == "extract" and run["error"]
     assert doc["status"] == "failed" and "extract" in (doc["status_detail"] or "")
+
+
+def test_api_process_path_reaches_gemini_for_all_three_llm_stages(api, make_pdf, monkeypatch):
+    """The production HTTP path — POST /documents/{id}/process — must construct
+    a Gemini-backed extractor, entity confirmer and relationship confirmer, and
+    hand the two confirmers to the resolve/reason stages.
+
+    The transport is stubbed at ``app.llm._new_transport`` so the real client
+    classes are exercised with no network call and no real key.
+    """
+    from app.llm import EntityConfirmer, RelationshipConfirmer, _Reply
+
+    monkeypatch.setenv("FKL_LLM_API_KEY_ENV", "FKL_TEST_KEY")
+    monkeypatch.setenv("FKL_TEST_KEY", "not-a-real-key")
+    get_settings.cache_clear()
+
+    built: list[str] = []
+
+    class StubTransport:
+        def complete(self, **kw):
+            return _Reply(text='{"facts": []}')
+
+    def fake_new_transport(settings):
+        assert settings.llm_provider == "gemini", settings.llm_provider
+        built.append(settings.llm_model)
+        return StubTransport()
+
+    monkeypatch.setattr("app.llm._new_transport", fake_new_transport)
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("app.entities.resolve_document",
+                        lambda doc, **kw: seen.update(entity=kw.get("llm")))
+    monkeypatch.setattr("app.reason.reason_document",
+                        lambda doc, **kw: seen.update(relationship=kw.get("llm")))
+
+    up = api.post("/documents", files={"file": ("d.pdf", _pdf_bytes(make_pdf), "application/pdf")})
+    doc_id = up.json()["id"]
+    assert api.post(f"/documents/{doc_id}/process").status_code == 202
+
+    # one transport per client: extractor + entity confirmer + relationship confirmer
+    assert built == ["gemini-2.5-flash"] * 3, built
+    assert isinstance(seen.get("entity"), EntityConfirmer), "resolve stage got no Gemini confirmer"
+    assert isinstance(seen.get("relationship"), RelationshipConfirmer), \
+        "reason stage got no Gemini confirmer"
+
+
+@pytest.mark.parametrize("q", ['\'";--', '"', 'a"b', 'NEAR(a b)', 'a OR b', 'col*', '^x', '('])
+def test_full_text_search_never_500s_on_hostile_input(seeded_api, q):
+    """FTS5 syntax in the query string must be searched as literal text.
+
+    Regression: the query was wrapped in double quotes without escaping the
+    embedded ones, so `'";--` closed the literal early, the rest was parsed as
+    FTS syntax, and sqlite3.OperationalError surfaced as HTTP 500.
+    """
+    resp = seeded_api.get("/facts", params={"q": q})
+    assert resp.status_code == 200, resp.text
+    assert isinstance(resp.json()["items"], list)
+
+
+def test_full_text_search_still_matches_normal_terms(seeded_api):
+    assert seeded_api.get("/facts", params={"q": "revenue"}).json()["total"] == 4
