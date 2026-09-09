@@ -461,7 +461,7 @@ ValidationAction = Literal["accepted", "overridden", "downgraded", "not_applicab
 
 class RelationshipProposal(BaseModel):
     """The LLM's *semantic proposal* for one candidate pair (see
-    ``app.llm.AnthropicRelationshipConfirmer``). Vocabulary is a plain ``str`` on
+    ``app.llm.RelationshipConfirmer``). Vocabulary is a plain ``str`` on
     purpose — deterministic code in ``app.reason`` validates and may override it."""
 
     relationship: str = ""            # raw category string from the model

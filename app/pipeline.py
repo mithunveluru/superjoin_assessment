@@ -76,13 +76,33 @@ def _aggregate(conn: sqlite3.Connection, document_id: int, run_id: int, stage: s
     )
 
 
+def _chunk_error_reasons(conn, run_id: int, limit: int = 3) -> str:
+    """The distinct chunk-level failure reasons for one run, commonest first —
+    e.g. ``rate_limit x14, api_error x4``. Diagnosis belongs in the message."""
+    rows = conn.execute(
+        "SELECT reason, COUNT(*) AS n FROM failures WHERE run_id = ? "
+        "AND failure_type = 'run_error' GROUP BY reason ORDER BY n DESC LIMIT ?",
+        (run_id, limit),
+    ).fetchall()
+    return ", ".join(f"{r['reason']} x{r['n']}" for r in rows) or "no reason recorded"
+
+
+def _optional_client(factory, settings: Settings):
+    """Build an optional LLM client, or None. A missing SDK / bad key must not
+    take down a run that works deterministically without it."""
+    try:
+        return factory(settings)
+    except Exception:  # noqa: BLE001 — optional enhancement, degrade quietly
+        return None
+
+
 def run(document_id: int, run_id: int, *, database_path: str | None = None,
         settings: Settings | None = None, extractor: Any = None,
         entity_confirmer: Any = None, relationship_confirmer: Any = None) -> dict:
     """Execute the stages for one document. Safe to call from a BackgroundTask."""
     from app.entities import resolve_document
     from app.extract import extract_document
-    from app.llm import AnthropicExtractor
+    from app.llm import EntityConfirmer, Extractor, RelationshipConfirmer
     from app.normalize import normalize_document
     from app.reason import reason_document
     from app.verify import verify_document
@@ -94,9 +114,21 @@ def run(document_id: int, run_id: int, *, database_path: str | None = None,
     try:
         if extractor is None and settings.llm_api_key():
             try:
-                extractor = AnthropicExtractor(settings)
+                extractor = Extractor(settings)
             except Exception as e:  # noqa: BLE001 — surfaced as a stage failure below
                 failed_stage, error = "extract", f"extractor init: {e!r}"[:400]
+
+        # The Phase-7 / Phase-9 semantic steps are the *other* half of the LLM
+        # split: deterministic code decides what it can, and asks the model only
+        # about what it cannot (is this the same entity? is this the same
+        # measure?). Unwired, every deferred pair fell through to UNCERTAIN
+        # "no semantic confirmer available". Optional by design — construction
+        # failure degrades to the deterministic path, it never fails the run.
+        if settings.llm_api_key():
+            if entity_confirmer is None:
+                entity_confirmer = _optional_client(EntityConfirmer, settings)
+            if relationship_confirmer is None:
+                relationship_confirmer = _optional_client(RelationshipConfirmer, settings)
 
         if failed_stage is None:
             for stage in _STAGES:
@@ -111,9 +143,13 @@ def run(document_id: int, run_id: int, *, database_path: str | None = None,
                         elif res.extraction_errors and not res.candidates_persisted:
                             # every chunk errored (bad/missing client, API down) — nothing
                             # to ground. An honest 0-fact extraction (no errors) is fine.
+                            # Name *why*: a bare error count sends you reading logs.
                             failed_stage = stage
+                            # res.run_id, not run_id: per-chunk failures are
+                            # recorded against the *extract* run, not the full one
                             error = (f"extraction produced no facts "
-                                     f"({res.extraction_errors} chunk error(s))")
+                                     f"({res.extraction_errors} chunk error(s): "
+                                     f"{_chunk_error_reasons(conn, res.run_id)})")
                     elif stage == "ground":
                         verify_document(document_id, database_path=database_path, settings=settings)
                     elif stage == "normalize":
