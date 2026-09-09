@@ -1,6 +1,6 @@
 """Phase 4 smoke test: ingest a PDF, run candidate extraction, print the
 observability summary. Needs the starter PDFs locally (not committed) and, for a
-live run, ANTHROPIC_API_KEY set.
+live run, GEMINI_API_KEY set.
 
     python scripts/smoke_extract.py starter-datasets/delhivery/03-*.pdf
     FKL_DATABASE_PATH=/tmp/smoke.db python scripts/smoke_extract.py <pdf> [<pdf> ...]
@@ -24,7 +24,7 @@ def main(pdf_paths: list[str]) -> int:
     try:
         for path in pdf_paths:
             ing = ingest_pdf(path)
-            res = extract_document(ing.document_id)  # real AnthropicExtractor
+            res = extract_document(ing.document_id)  # real Extractor
             print(f"\n=== {path} (document_id={ing.document_id}) ===")
             print(f"  run={res.run_id} status={res.status} cost≈${res.estimated_cost_usd}")
             print(f"  chunks={res.chunks_processed} generated={res.candidates_generated} "

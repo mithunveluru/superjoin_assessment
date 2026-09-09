@@ -6,7 +6,7 @@ summary (§16 of the Phase-8 brief).
 
 Needs a database that already holds ELIGIBLE_FOR_REASONING facts — i.e. the
 extract -> verify -> normalize -> resolve pipeline has run (which needs
-ANTHROPIC_API_KEY for extraction). With an empty database it reports that and
+GEMINI_API_KEY for extraction). With an empty database it reports that and
 exits cleanly. Not imported by the app or the test suite.
 """
 

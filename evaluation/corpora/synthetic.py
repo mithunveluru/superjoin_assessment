@@ -26,12 +26,14 @@ _FY23 = ("2022-04-01", "2023-04-01")
 _FY24 = ("2023-04-01", "2024-04-01")
 
 
-def _document(conn, tag: str, *, publication_date: str) -> int:
+def _document(conn, tag: str, *, publication_date: str, title: str, filename: str) -> int:
+    # title/filename are fixture labels only — "(synthetic)" keeps the fixture
+    # distinguishable from corpus-derived documents in the UI and the API.
     sha = (tag + "0" * 64)[:64]
     return conn.execute(
-        "INSERT INTO documents (sha256, stored_path, page_count, status, uploaded_at, "
-        "publication_date) VALUES (?, ?, 0, 'ingested', ?, ?)",
-        (sha, f"uploads/{sha}.pdf", _NOW, publication_date),
+        "INSERT INTO documents (sha256, stored_path, original_filename, title, page_count, "
+        "status, uploaded_at, publication_date) VALUES (?, ?, ?, ?, 0, 'ingested', ?, ?)",
+        (sha, f"uploads/{sha}.pdf", filename, title, _NOW, publication_date),
     ).lastrowid
 
 
@@ -112,8 +114,12 @@ def seed_corpus(database_path: str, *, settings: Settings | None = None,
     db.init_db(database_path)
     conn = db.connect(database_path)
     try:
-        doc_a = _document(conn, "syntheticA", publication_date="2025-01-30")
-        doc_b = _document(conn, "syntheticB", publication_date="2025-05-25")
+        doc_a = _document(conn, "syntheticA", publication_date="2025-01-30",
+                          title="Acme Annual Report FY24 (synthetic)",
+                          filename="acme-annual-report-fy24.pdf")
+        doc_b = _document(conn, "syntheticB", publication_date="2025-05-25",
+                          title="Acme Q4 FY24 Earnings Deck (synthetic)",
+                          filename="acme-q4-fy24-earnings-deck.pdf")
         acme = _entity(conn, "Acme")
         s = _Seeder(conn)
         elig = not break_grounding

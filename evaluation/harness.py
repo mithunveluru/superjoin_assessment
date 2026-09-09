@@ -4,7 +4,7 @@
     python -m evaluation.harness --sweep         # also run the curated config sweep
     python -m evaluation.harness --db <path>     # evaluate an existing database (no pipeline)
     python -m evaluation.harness --corpus <dir>  # run the real pipeline on a dir of PDFs
-                                                 #   (needs ANTHROPIC_API_KEY for extraction)
+                                                 #   (needs GEMINI_API_KEY for extraction)
 
 Checks **expected properties** (evaluation/cases/**/*.json -> evaluation.properties),
 never hard-coded answers, plus global invariants and a config sweep. Exit code 0
@@ -217,7 +217,7 @@ def run_corpus(corpus_dir: str, *, settings: Settings | None = None,
     settings = settings or get_settings()
     if not settings.llm_api_key():
         raise SystemExit(
-            "--corpus runs Phase-4 extraction, which needs ANTHROPIC_API_KEY. "
+            "--corpus runs Phase-4 extraction, which needs GEMINI_API_KEY. "
             "Use the default synthetic corpus, or --db <path> on an already-processed database."
         )
     pdfs = sorted(Path(corpus_dir).glob("*.pdf"))

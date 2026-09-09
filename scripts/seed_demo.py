@@ -8,7 +8,7 @@ Builds the Phase-10 synthetic corpus (evaluation/corpora/synthetic.py): two
 documents, one resolved entity ("Acme"), and facts/relationships that exercise
 all five relationship categories plus one quarantined extraction. Nothing here is
 corpus-specific — it is a deterministic fixture for eyeballing the UI/API without
-an ANTHROPIC_API_KEY.
+a GEMINI_API_KEY.
 
 Then:
 

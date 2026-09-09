@@ -6,8 +6,8 @@ brief).
 
 Needs a database that already holds ELIGIBLE_FOR_REASONING facts (the
 extract -> verify -> normalize -> resolve pipeline has run — extraction needs
-ANTHROPIC_API_KEY). With an empty database it reports that and exits. Runs
-deterministically with NO LLM unless ANTHROPIC_API_KEY is set and --llm is
+GEMINI_API_KEY). With an empty database it reports that and exits. Runs
+deterministically with NO LLM unless GEMINI_API_KEY is set and --llm is
 passed. Not imported by the app or the test suite.
 """
 
@@ -32,10 +32,10 @@ def main(argv: list[str]) -> int:
     try:
         if use_llm:
             from app.config import get_settings
-            from app.llm import AnthropicRelationshipConfirmer
+            from app.llm import RelationshipConfirmer
 
             if get_settings().llm_api_key():
-                llm = AnthropicRelationshipConfirmer()
+                llm = RelationshipConfirmer()
             else:
                 print("--llm requested but no API key; running deterministically")
 
