@@ -2,8 +2,10 @@
 (prefix ``FKL_``) and an optional ``.env`` file. Nothing dataset-specific.
 
 The LLM *API key* is the one exception to the prefix: it is read from whatever
-env var ``llm_api_key_env`` names (default ``ANTHROPIC_API_KEY``), so real
-secrets never sit under a project-specific name and never get committed.
+env var ``llm_api_key_env`` names (default ``GEMINI_API_KEY``), so the real
+secret never sits under a project-specific name and never gets committed. The
+indirection exists so tests can point at a variable nothing defines; production
+should just set ``GEMINI_API_KEY``.
 """
 
 from __future__ import annotations
@@ -15,6 +17,14 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _dotenv_values() -> dict[str, str]:
+    """``.env`` as a plain dict — re-read per call so a key added while the
+    process runs is picked up (the file is tiny; this is not a hot path)."""
+    from dotenv import dotenv_values
+
+    return {k: v for k, v in dotenv_values(PROJECT_ROOT / ".env").items() if v}
 
 
 class Settings(BaseSettings):
@@ -30,15 +40,17 @@ class Settings(BaseSettings):
     uploads_dir: Path = PROJECT_ROOT / "uploads"
 
     # --- LLM (used from Phase 4) ------------------------------------------------
-    llm_provider: str = "anthropic"
-    llm_model: str = "claude-sonnet-5"
-    llm_api_key_env: str = "ANTHROPIC_API_KEY"
-    # Sonnet 5 rejects sampling params (temperature/top_p/top_k) — the extraction
-    # client does not send temperature. Kept for reproducibility docs / older models.
-    llm_temperature: float = 0.0
-    llm_effort: str = "low"          # output_config.effort for structured extraction
+    llm_provider: str = "gemini"     # the only supported provider (app/llm.py)
+    llm_model: str = "gemini-2.5-flash"
+    llm_api_key_env: str = "GEMINI_API_KEY"
+    llm_temperature: float = 0.0     # sent to Gemini; 0.0 keeps extraction repeatable
     llm_max_tokens: int = 8192       # per-chunk extraction output cap
     llm_timeout_seconds: float = 120.0
+    llm_retry_attempts: int = 5      # SDK-level retry on 429/5xx
+    # runs.estimated_cost_usd is an estimate only — set these to the configured
+    # model's list price (defaults are gemini-2.5-flash rates).
+    llm_input_cost_per_token: float = 0.3e-6
+    llm_output_cost_per_token: float = 2.5e-6
     prompt_version: str = "v1"       # extraction prompt version (app/prompts/extraction_<v>.md)
     relationship_prompt_version: str = "v1"  # app/prompts/relationship_<v>.md (Phase 9)
 
@@ -131,8 +143,16 @@ class Settings(BaseSettings):
 
     def llm_api_key(self) -> str | None:
         """The live LLM API key, or None if unset. Read at call time so tests
-        and deploys can set it after import."""
-        return os.environ.get(self.llm_api_key_env)
+        and deploys can set it after import.
+
+        ``.env`` is consulted as a fallback: pydantic-settings reads that file
+        for ``FKL_``-prefixed *fields* but never exports it to ``os.environ``,
+        so a key placed there — exactly as ``.env.example`` instructs — would
+        otherwise be invisible. A real environment variable always wins.
+        """
+        return os.environ.get(self.llm_api_key_env) or _dotenv_values().get(
+            self.llm_api_key_env
+        )
 
 
 @lru_cache

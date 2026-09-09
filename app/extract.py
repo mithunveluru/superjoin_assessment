@@ -190,13 +190,13 @@ def extract_document(
 
     ``client`` is any object exposing ``.model``, ``.prompt_version`` and
     ``.extract(chunk_text, doc_header) -> LLMExtraction``. If omitted, a real
-    ``AnthropicExtractor`` is constructed (needs the SDK + an API key).
+    ``Extractor`` is constructed (needs the SDK + an API key).
     """
     settings = settings or get_settings()
     if client is None:
-        from app.llm import AnthropicExtractor
+        from app.llm import Extractor
 
-        client = AnthropicExtractor(settings)
+        client = Extractor(settings)
 
     conn = db.connect(database_path)
     run_id: int | None = None
@@ -226,7 +226,7 @@ def extract_document(
                     json.dumps({"extract": client.prompt_version}),
                     json.dumps({
                         "max_tokens": settings.llm_max_tokens,
-                        "effort": settings.llm_effort,
+                        "temperature": settings.llm_temperature,
                         "max_llm_calls_per_doc": settings.max_llm_calls_per_doc,
                     }),
                 ),
@@ -261,7 +261,8 @@ def extract_document(
                         "chunks", chunk["id"], {"error": repr(e)[:300]},
                     )
                 continue
-            cost += result.input_tokens * 2e-6 + result.output_tokens * 10e-6
+            cost += (result.input_tokens * settings.llm_input_cost_per_token
+                     + result.output_tokens * settings.llm_output_cost_per_token)
 
             if result.error_code == "auth":
                 raise ExtractError("llm_auth_failed", detail=result.error_detail,

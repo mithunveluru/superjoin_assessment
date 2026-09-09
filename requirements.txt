@@ -11,8 +11,9 @@ httpx>=0.27
 # Phase 2 — PDF ingestion
 pymupdf>=1.24
 
-# Phase 4 — LLM candidate extraction
-anthropic>=1.4
+# Phase 4 — LLM candidate extraction (Google Gemini; imported lazily inside
+# app/llm.py so the app and the test suite load without it)
+google-genai>=1.0
 
 # Phase 5 — evidence verification (conservative fuzzy matching only)
 rapidfuzz>=3.6
