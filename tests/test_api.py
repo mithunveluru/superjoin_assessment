@@ -408,3 +408,30 @@ def test_full_text_search_never_500s_on_hostile_input(seeded_api, q):
 
 def test_full_text_search_still_matches_normal_terms(seeded_api):
     assert seeded_api.get("/facts", params={"q": "revenue"}).json()["total"] == 4
+
+
+def test_startup_reconciles_runs_interrupted_by_a_restart(db_path, make_pdf):
+    """A run left 'running' by a crash must not wedge the document for ever.
+
+    Regression: process_document returns a 'running' full run as-is, so an
+    interrupted run made the document permanently un-processable.
+    """
+    from app.ingest import ingest_pdf
+
+    db.init_db(db_path)
+    doc_id = ingest_pdf(str(make_pdf(["Acme reported revenue for FY24."])),
+                        database_path=db_path).document_id
+    conn = db.connect(db_path)
+    with db.transaction(conn):
+        run_id = pipeline_start(conn, doc_id, settings=S)   # leaves status='running'
+        conn.execute("UPDATE documents SET status='processing' WHERE id=?", (doc_id,))
+    assert conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()[0] == "running"
+    conn.close()
+
+    get_settings.cache_clear()
+    with TestClient(app) as client:            # lifespan runs the reconciliation
+        run = client.get(f"/documents/{doc_id}/status").json()["run"]
+        assert run["status"] == "failed"
+        assert "interrupted" in run["error"]
+        # and the document is processable again rather than wedged
+        assert client.post(f"/documents/{doc_id}/process").status_code == 202

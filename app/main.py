@@ -43,9 +43,37 @@ from app.models import (
 STATIC_DIR = Path(__file__).with_name("static")
 
 
+def reconcile_interrupted_runs(conn) -> int:
+    """Fail runs left ``running`` by a crash or restart, and return the count.
+
+    Processing happens in-process as a BackgroundTask, so at startup no run can
+    legitimately still be in flight. Without this a killed run stays ``running``
+    for ever and ``POST /process`` keeps returning it as-is — the document can
+    never be re-processed.
+    """
+    with db.transaction(conn):
+        cur = conn.execute(
+            "UPDATE runs SET status = 'failed', finished_at = datetime('now'), "
+            "error = COALESCE(error, 'interrupted — the server stopped mid-run') "
+            "WHERE status = 'running'"
+        )
+        n = cur.rowcount
+        conn.execute(
+            "UPDATE documents SET status = 'failed', status_detail = "
+            "COALESCE(status_detail, 'interrupted — the server stopped mid-run') "
+            "WHERE status = 'processing'"
+        )
+    return n
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init_db()
+    conn = db.connect()
+    try:
+        reconcile_interrupted_runs(conn)
+    finally:
+        conn.close()
     yield
 
 
