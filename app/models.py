@@ -23,6 +23,7 @@ class DatabaseHealth(BaseModel):
 class LLMHealth(BaseModel):
     provider: str
     model: str
+    api_key_env: str          # the variable name to set — never the key itself
     api_key_present: bool
 
 

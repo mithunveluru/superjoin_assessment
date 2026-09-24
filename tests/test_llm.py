@@ -67,7 +67,7 @@ def test_every_client_goes_through_the_gemini_transport(fake_key, client_cls):
     """Extractor / entity confirmer / relationship confirmer share one adapter."""
     c = client_cls(_settings())
     assert type(c._transport).__name__ == "_GeminiTransport"
-    assert c.model == "gemini-2.5-flash"
+    assert c.model == "gemini-3.6-flash"
 
 
 # --------------------------------------------------------------------------- #
@@ -131,7 +131,7 @@ def test_extractor_converts_a_gemini_reply_into_LLMExtraction(fake_key):
     assert out.parsed.facts[0].subject == "Acme"
     assert out.raw_text == GOOD_EXTRACTION          # raw response preserved verbatim
     assert (out.input_tokens, out.output_tokens) == (11, 7)
-    assert out.model == "gemini-2.5-flash"
+    assert out.model == "gemini-3.6-flash"
 
 
 @pytest.mark.parametrize(
@@ -231,6 +231,22 @@ def test_network_failures_become_typed_replies_not_exceptions(fake_key, monkeypa
     assert reply.text is None
 
 
+def test_transport_caps_thinking_so_the_answer_fits(fake_key, monkeypatch):
+    """Thinking tokens share max_output_tokens: uncapped, a thinking model spent
+    ~7.9k of 8192 on a one-page chunk and the JSON answer came back truncated."""
+    t = _new_transport(_settings())
+    sent = {}
+
+    class Capture:
+        def generate_content(self, **kw):
+            sent.update(kw["config"])
+            raise httpx.ConnectError("stop here")
+
+    monkeypatch.setattr(t, "_client", type("C", (), {"models": Capture()})())
+    t.complete(system="s", user="u", schema={"type": "object"}, max_tokens=16)
+    assert sent["thinking_config"] == {"thinking_level": "LOW"}
+
+
 # --------------------------------------------------------------------------- #
 # prompt versions                                                            #
 # --------------------------------------------------------------------------- #
@@ -251,3 +267,97 @@ def test_default_prompt_version_exists_and_pins_the_subject_rule():
     text = load_prompt(s.prompt_version)
     assert "grammatical subject" in text          # subject != sentence subject
     assert "document artifact" in text            # boilerplate subjects excluded
+
+
+# --------------------------------------------------------------------------- #
+# Groq provider (OpenAI-compatible HTTP; httpx.MockTransport, no network)     #
+# --------------------------------------------------------------------------- #
+def _groq(monkeypatch, handler, **kw):
+    """A Groq transport whose HTTP layer is ``handler`` (request -> Response)."""
+    from app.llm import _GroqTransport
+
+    monkeypatch.setenv(FAKE_KEY_VAR, "not-a-real-key")
+    monkeypatch.setattr("app.llm.time.sleep", lambda s: None)
+    t = _new_transport(_settings(llm_provider="groq", **kw))
+    assert isinstance(t, _GroqTransport)
+    t._client = httpx.Client(transport=httpx.MockTransport(handler), headers=t._client.headers)
+    return t
+
+
+def _ok(content, finish="stop"):
+    return httpx.Response(200, json={
+        "choices": [{"message": {"content": content}, "finish_reason": finish}],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+    })
+
+
+def test_groq_provider_defaults_model_and_key_variable():
+    s = Settings(_env_file=None, llm_provider="groq")
+    assert s.llm_model == "openai/gpt-oss-120b"
+    assert s.llm_api_key_env == "GROQ_API_KEY"
+    # an explicit choice always wins over the provider default
+    assert Settings(_env_file=None, llm_provider="groq", llm_model="qwen/x").llm_model == "qwen/x"
+
+
+def test_groq_request_shape_and_reply_conversion(monkeypatch):
+    import json as _json
+
+    sent = {}
+
+    def handler(req):
+        sent.update(_json.loads(req.content))
+        sent["auth"] = req.headers["authorization"]
+        return _ok('{"facts": []}')
+
+    t = _groq(monkeypatch, handler)
+    r = t.complete(system="sys", user="usr", schema={"type": "object"}, max_tokens=64)
+    assert (r.text, r.stop, r.input_tokens, r.output_tokens, r.error_code) == \
+        ('{"facts": []}', "stop", 11, 7, None)
+    assert sent["auth"] == "Bearer not-a-real-key"
+    assert sent["model"] == "openai/gpt-oss-120b"
+    assert sent["messages"][0] == {"role": "system", "content": "sys"}
+    assert sent["response_format"]["type"] == "json_schema"
+    assert sent["max_completion_tokens"] == 64
+    assert sent["reasoning_effort"] == "low"
+
+
+def test_groq_retries_a_short_rate_limit_then_succeeds(monkeypatch):
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(429, headers={"retry-after": "1"},
+                              json={"error": {"message": "slow down"}}) if len(calls) == 1 \
+            else _ok('{"facts": []}')
+
+    r = _groq(monkeypatch, handler).complete(system="s", user="u", schema={}, max_tokens=8)
+    assert len(calls) == 2 and r.error_code is None
+
+
+def test_groq_daily_quota_fails_fast_as_rate_limit(monkeypatch):
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(429, headers={"retry-after": "7200"}, json={
+            "error": {"message": "Rate limit reached for requests per day"}})
+
+    r = _groq(monkeypatch, handler).complete(system="s", user="u", schema={}, max_tokens=8)
+    assert len(calls) == 1, "a day-long wait must not be retried"
+    assert r.error_code == "rate_limit" and "per day" in r.error_detail
+
+
+@pytest.mark.parametrize(("status", "code"), [(401, "auth"), (400, "api_error"), (504, "timeout")])
+def test_groq_http_errors_become_typed_replies(monkeypatch, status, code):
+    t = _groq(monkeypatch, lambda req: httpx.Response(status, json={"error": {"message": "nope"}}),
+              llm_retry_attempts=1)
+    r = t.complete(system="s", user="u", schema={}, max_tokens=8)
+    assert r.error_code == code and r.text is None and "nope" in r.error_detail
+
+
+def test_groq_length_finish_is_a_truncated_extraction(monkeypatch):
+    t = _groq(monkeypatch, lambda req: _ok('{"facts": [', finish="length"))
+    ex = Extractor(_settings(llm_provider="groq"))
+    ex._transport = t
+    out = ex.extract("Acme revenue was 5.", "doc")
+    assert out.error_code == "truncated_response"

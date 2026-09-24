@@ -81,7 +81,8 @@ def _chunk_error_reasons(conn, run_id: int, limit: int = 3) -> str:
     e.g. ``rate_limit x14, api_error x4``. Diagnosis belongs in the message."""
     rows = conn.execute(
         "SELECT reason, COUNT(*) AS n FROM failures WHERE run_id = ? "
-        "AND failure_type = 'run_error' GROUP BY reason ORDER BY n DESC LIMIT ?",
+        "AND failure_type IN ('run_error', 'extraction_unparsed') "
+        "GROUP BY reason ORDER BY n DESC LIMIT ?",
         (run_id, limit),
     ).fetchall()
     return ", ".join(f"{r['reason']} x{r['n']}" for r in rows) or "no reason recorded"

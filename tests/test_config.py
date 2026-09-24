@@ -15,7 +15,7 @@ def test_defaults(monkeypatch):
     # local .env happens to select (a real .env may switch provider/model).
     s = Settings(_env_file=None)
     assert s.llm_provider == "gemini"
-    assert s.llm_model == "gemini-2.5-flash"
+    assert s.llm_model == "gemini-3.6-flash"
     assert s.llm_api_key_env == "GEMINI_API_KEY"
     assert s.llm_temperature == 0.0
     assert s.retrieval_top_k == 15

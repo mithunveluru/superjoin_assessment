@@ -308,6 +308,9 @@ def extract_document(
                     continue
                 consecutive_errors = 0
                 if result.error_code in ("malformed_response", "truncated_response"):
+                    # counted so a run where every chunk came back unusable fails
+                    # (and can be re-processed) instead of "completing" with 0 facts
+                    counts["extraction_errors"] += 1
                     _record_failure(
                         conn, run_id, document_id, "extraction_unparsed",
                         result.error_code, "raw_extractions", raw_id,

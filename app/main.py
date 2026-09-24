@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -94,6 +95,14 @@ async def _api_error_handler(_: Request, exc: APIError) -> JSONResponse:
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    # Keep FastAPI's 422 but in the common error body.
+    msg = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
+    return JSONResponse(status_code=422, content={"error": {"code": "invalid_request",
+                                                            "message": msg}})
+
+
 def get_conn() -> Iterator[sqlite3.Connection]:
     # check_same_thread=False: Starlette may run this generator's teardown on a
     # different threadpool thread than its setup. One request, used sequentially.
@@ -133,6 +142,7 @@ def health() -> HealthResponse:
         version=__version__,
         database=DatabaseHealth(path=str(settings.database_path), ok=db_ok, tables=tables),
         llm=LLMHealth(provider=settings.llm_provider, model=settings.llm_model,
+                      api_key_env=settings.llm_api_key_env,
                       api_key_present=settings.llm_api_key() is not None),
     )
 
@@ -263,6 +273,9 @@ def list_relationships(
     llm_used: bool | None = None, sort: str = Query("confidence"),
     limit: int | None = None, offset: int | None = None,
 ):
+    if category is not None and category not in queries._REL_CATEGORY:
+        raise APIError(400, "invalid_category",
+                       f"unknown category {category!r}; one of {sorted(queries._REL_CATEGORY)}")
     filters = {
         "category": category, "context_dimension": context_dimension,
         "validation_action": validation_action, "document_id": document_id,

@@ -12,6 +12,7 @@ from tests.test_db import EXPECTED_TABLES
 
 def test_health_ok(db_path, monkeypatch):
     # pin model/key-name so the assertions do not depend on the local .env
+    monkeypatch.setenv("FKL_LLM_PROVIDER", "gemini")
     monkeypatch.setenv("FKL_LLM_MODEL", "gemini-2.5-flash")
     monkeypatch.setenv("FKL_LLM_API_KEY_ENV", "FKL_TEST_ABSENT_KEY")
     monkeypatch.delenv("FKL_TEST_ABSENT_KEY", raising=False)

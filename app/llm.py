@@ -1,12 +1,14 @@
 """LLM clients for extraction (Phase 4), entity confirmation (Phase 7) and
-relationship proposal (Phase 9). One call shape, one provider: Google Gemini.
+relationship proposal (Phase 9). One call shape, two providers: Google Gemini
+(default) and Groq (``FKL_LLM_PROVIDER=groq``; a larger free tier).
 
-Provider specifics live in exactly one place — ``_GeminiTransport``. It takes
+Provider specifics live in exactly one place per provider — ``_GeminiTransport``
+and ``_GroqTransport``. Each takes
 (system, user, json-schema) and returns a ``_Reply``: text + usage + an error
 code from a fixed, provider-neutral vocabulary. Everything above it (prompts,
 schemas, parsing, validation, the deterministic pipeline) speaks only ``_Reply``
-and never sees a Gemini object, so swapping or adding a provider means writing
-one class, not touching the application.
+and never sees a provider object, so adding a provider means writing one
+class, not touching the application.
 
 The SDK is imported lazily inside the transport so ``app.extract`` and the tests
 need neither it nor an API key — tests inject fakes with the same surface.
@@ -20,6 +22,7 @@ response text is always returned so ``facts.raw_payload`` /
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,7 +41,7 @@ from app.models import (
 PROMPTS_DIR = Path(__file__).with_name("prompts")
 
 
-PROVIDER = "gemini"
+PROVIDERS = ("gemini", "groq")
 
 
 class LLMConfigError(RuntimeError):
@@ -127,6 +130,10 @@ class _GeminiTransport:
                     "max_output_tokens": max_tokens,
                     "response_mime_type": "application/json",
                     "response_schema": _gemini_schema(schema),
+                    # thinking tokens count against max_output_tokens; uncapped, a
+                    # one-page chunk spent ~7.9k of 8192 thinking and the JSON was
+                    # truncated. Extraction is transcription; verify.py re-checks it.
+                    "thinking_config": {"thinking_level": "LOW"},
                     # we pass no tools; disabling AFC also silences the SDK's
                     # per-call "direct use of AFC" warning in the server log
                     "automatic_function_calling": {"disable": True},
@@ -160,7 +167,80 @@ class _GeminiTransport:
         return _Reply(text=resp.text, stop=stop, input_tokens=in_tok, output_tokens=out_tok)
 
 
-def _new_transport(settings: Settings) -> _GeminiTransport:
+class _GroqTransport:
+    """Groq's OpenAI-compatible chat API over plain httpx — no SDK needed.
+
+    JSON-schema output is best-effort (``strict`` would force every optional
+    field into ``required``); the parsers above validate every reply anyway.
+    """
+
+    URL = "https://api.groq.com/openai/v1/chat/completions"
+    # a wait longer than this is the daily quota, not a per-minute burst —
+    # retrying cannot help, so fail the chunk as rate_limit straight away
+    _MAX_RETRY_WAIT_S = 60.0
+
+    def __init__(self, settings: Settings, api_key: str):
+        self.settings = settings
+        self._client = httpx.Client(
+            timeout=settings.llm_timeout_seconds,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+    def complete(self, *, system: str, user: str, schema: dict, max_tokens: int) -> _Reply:
+        body: dict[str, Any] = {
+            "model": self.settings.llm_model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": self.settings.llm_temperature,
+            "max_completion_tokens": max_tokens,
+            "response_format": {"type": "json_schema",
+                                "json_schema": {"name": "response", "schema": schema}},
+        }
+        if self.settings.llm_model.startswith("openai/gpt-oss"):
+            # reasoning tokens share max_completion_tokens (see the Gemini note)
+            body["reasoning_effort"] = "low"
+
+        for attempt in range(max(1, self.settings.llm_retry_attempts)):
+            try:
+                resp = self._client.post(self.URL, json=body)
+            except httpx.TimeoutException as e:
+                return _Reply(error_code="timeout", error_detail=f"transport timeout: {e}")
+            except httpx.HTTPError as e:
+                return _Reply(error_code="api_error",
+                              error_detail=f"transport: {type(e).__name__}: {e}")
+            if resp.status_code not in (429, 500, 502, 503):
+                break
+            try:
+                wait = float(resp.headers.get("retry-after") or 2 ** attempt)
+            except ValueError:
+                wait = 2.0 ** attempt
+            if wait > self._MAX_RETRY_WAIT_S or attempt == self.settings.llm_retry_attempts - 1:
+                break
+            time.sleep(wait)
+
+        if resp.status_code != 200:
+            try:
+                message = resp.json()["error"]["message"]
+            except (ValueError, KeyError, TypeError):
+                message = resp.text[:300]
+            kind = {401: "auth", 403: "auth", 429: "rate_limit",
+                    408: "timeout", 504: "timeout"}.get(resp.status_code, "api_error")
+            return _Reply(error_code=kind, error_detail=f"status {resp.status_code}: {message}")
+
+        data = resp.json()
+        usage = data.get("usage") or {}
+        choice = (data.get("choices") or [{}])[0]
+        finish = choice.get("finish_reason")
+        in_tok, out_tok = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+        if finish == "content_filter":
+            return _Reply(stop="refusal", input_tokens=in_tok, output_tokens=out_tok,
+                          error_code="refusal", error_detail="model refused (content_filter)")
+        return _Reply(text=(choice.get("message") or {}).get("content"),
+                      stop="max_tokens" if finish == "length" else finish,
+                      input_tokens=in_tok, output_tokens=out_tok)
+
+
+def _new_transport(settings: Settings) -> _GeminiTransport | _GroqTransport:
     """Settings -> one authenticated Gemini transport.
 
     The key and the provider are checked *before* the SDK import, so a missing
@@ -168,17 +248,20 @@ def _new_transport(settings: Settings) -> _GeminiTransport:
     raising an auth error once per chunk, which the per-chunk handler records as
     an opaque ``llm_client_exception``.
     """
-    if settings.llm_provider != PROVIDER:
+    if settings.llm_provider not in PROVIDERS:
         raise LLMConfigError(
             f"unsupported FKL_LLM_PROVIDER {settings.llm_provider!r} — "
-            f"this build supports {PROVIDER!r} only"
+            f"this build supports {' or '.join(map(repr, PROVIDERS))}"
         )
     key = settings.llm_api_key()
     if not key:
         raise LLMConfigError(
             f"{settings.llm_api_key_env} is not set — extraction and reasoning need a "
-            f"{PROVIDER} API key. Add it to .env (or export it) and restart the server."
+            f"{settings.llm_provider} API key. Add it to .env (or export it) and restart "
+            "the server."
         )
+    if settings.llm_provider == "groq":
+        return _GroqTransport(settings, key)
     return _GeminiTransport(settings, key)
 
 # The JSON schema we ask the model to fill. Hand-written (not generated) so the

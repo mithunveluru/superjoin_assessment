@@ -116,7 +116,8 @@ category; the semantic residue becomes `UNCERTAIN`.
 
 ## API
 
-FastAPI, JSON, common error body `{"error": {"code", "message"}}`, list
+FastAPI, JSON, common error body `{"error": {"code", "message"}}` (request
+validation errors too: `422 invalid_request`), list
 endpoints paginate with `?limit=` (default 50, max 200) `?offset=`. `uvicorn
 app.main:app` serves the UI at `/`, OpenAPI docs at `/docs`.
 
@@ -127,27 +128,40 @@ app.main:app` serves the UI at `/`, OpenAPI docs at `/docs`.
 | `POST /documents/{id}/process` | run the pipeline as a background task; idempotent — a completed run is returned as-is, and a document that already holds facts is refused with `409 already_processed` |
 | `GET /documents/{id}/status` | poll; a failed stage surfaces its error at HTTP 200 |
 | `GET /facts` · `GET /facts/{id}` | filter matrix (`type`, `lifecycle_state`, `evidence_status`, `modality`, `reasoning_eligible`, `q` FTS, …) + detail with quote, context window, relationships |
-| `GET /relationships` · `GET /relationships/{id}` | category / `context_dimension` / `validation_action` filters; detail with both full facts, the signals table, proposed-vs-final category |
+| `GET /relationships` · `GET /relationships/{id}` | category (unknown value → `400 invalid_category`) / `context_dimension` / `validation_action` filters; detail with both full facts, the signals table, proposed-vs-final category |
 | `GET /entities` · `GET /entities/{id}` | list / detail (aliases, sample facts) |
 | `GET /failures` | the quarantine / failure surface, joined to its referents |
 | `GET /health` | status, schema table count, `api_key_present` |
 
 ## UI
 
-Served at `/` — one `index.html` + `style.css` + `app.js` (~830 lines vanilla,
-no framework, no build). Six views:
+Served at `/` — one `index.html` + `style.css` + `app.js` (vanilla, no
+framework, no build step). All colours, spacing, radii, type sizes and shadows
+are CSS custom properties at the top of `style.css`; components only use those
+tokens. Type is IBM Plex Sans/Mono from Google Fonts, with a system-font
+fallback when offline. Responsive from 375px up, keyboard-navigable, respects
+`prefers-reduced-motion`. Six views:
 
-- **Documents** — upload, then **Process** with 2-second status polling.
-- **Facts** — the filter matrix + pagination; a row expands to the verbatim
-  quote, the numeric representation, reporting period, scope, modality, the
-  verification detail and the ±200-char context window.
-- **Relationships** — category tabs; each card shows Fact A | Fact B with quotes;
-  expanding shows the deterministic-signals table, the LLM-proposed-vs-final
-  category with the validation note, and the reasoning.
-- **Failures** — every failure row with its reason and the linked quarantined
-  fact or relationship.
+- **Overview** — headline counts, the relationship mix and evidence integrity
+  (each legend row links to the filtered list), recent documents, and the
+  pipeline stages with the model-assisted ones marked. An empty database shows
+  a first-run guide instead.
+- **Documents** — drag-and-drop or browse upload (non-PDFs are rejected before
+  upload, duplicates are reported), then **Process** with 2-second status
+  polling, the live stage, and a toast when it finishes or fails.
+- **Facts** — search + filters that apply as you change them, deep-linkable
+  (`#/facts?document_id=3`), pagination; a row (click or Enter) expands to the
+  verbatim quote, claim & context, normalized value, verification detail, the
+  surrounding page text and links to related facts.
+- **Relationships** — category tabs with counts (arrow-key navigable,
+  deep-linkable via `?category=` / `?open=`); each card shows Fact A | Fact B
+  with quotes; "Why this call" reveals the reasoning, model-proposed vs final
+  category, the deterministic signals and the source context.
 - **Entities** — canonical label, aliases (with `source_fact_id` for renames),
   sample facts.
+- **Failures** — counts by type, a type filter, and every failure with its
+  reason and linked fact or relationship; hard failures are listed before
+  "uncertain" pairs.
 
 No auth — local prototype.
 
@@ -168,7 +182,7 @@ The six starter PDFs are **git-ignored** — they are ~20 MB of third-party
 material, and the repository keeps only their provenance. A fresh clone is fully
 usable without them: `python -m evaluation.harness` and `scripts/seed_demo.py`
 build their own synthetic corpus, and the test suite passes: verified on a clean
-clone with no PDFs and no `.env` — **436 passed, 5 skipped**. The five skips are
+clone with no PDFs and no `.env` — **454 passed, 5 skipped**. The five skips are
 the tests that ingest a real starter PDF (in `test_retrieve`, `test_normalize`,
 `test_entities`, `test_verify`, `test_reason`), each guarded with
 `pytest.skip("starter PDF not present")`.
@@ -196,7 +210,8 @@ Any PDF works, though: upload your own from the **Documents** view.
 
 All app settings use the `FKL_` prefix and have safe defaults in
 [`.env.example`](.env.example). The only real secret is the LLM API key, read
-from the variable named by `FKL_LLM_API_KEY_ENV` (default `GEMINI_API_KEY`),
+from the variable named by `FKL_LLM_API_KEY_ENV` (default `GEMINI_API_KEY`, or
+`GROQ_API_KEY` with `FKL_LLM_PROVIDER=groq`),
 so it never carries a project-specific name and is never committed (`.env` is
 git-ignored). Groups: `FKL_LLM_*`, `FKL_DATABASE_PATH` / `FKL_UPLOADS_DIR`,
 `FKL_ENTITY_*` (two fuzzy thresholds), `FKL_RETRIEVAL_*` (top-k, thresholds,
@@ -231,13 +246,12 @@ Without a key, `POST /process` still returns `202`; the background run then fail
 at the `extract` stage and `GET /status` reports `status: "failed"` with the
 error (HTTP 200). Ingestion, verification, normalization, entity resolution,
 retrieval and reasoning are all key-free — only Phase-4 extraction calls the LLM
-(one call per chunk; the 3 Delhivery PDFs are ~1006 chunks, roughly $1–3 at
-Sonnet-5 rates).
+(one call per chunk; the 3 Delhivery PDFs are ~1006 chunks).
 
 ## Test & lint
 
 ```bash
-pytest                # 441 tests, ~30 s, no network, no API key
+pytest                # 459 tests, ~30 s, no network, no API key
 ruff check .
 ```
 
@@ -366,14 +380,24 @@ performed (see below).
 - **Required** for: Phase-4 candidate extraction (`POST /process` on a real PDF),
   borderline entity-cluster confirmation, and the optional semantic
   relationship-proposal step.
-- Provider: **Google Gemini**, model `gemini-2.5-flash` (`FKL_LLM_MODEL`). All
-  provider specifics live in one adapter (`_GeminiTransport` in `app/llm.py`);
-  prompts, JSON schemas, parsing and validation sit above it and never see a
-  Gemini object, so the rest of the application does not know which provider is
-  configured. The key is read at call time from `os.environ["GEMINI_API_KEY"]`,
-  falling back to that name in `.env`; it is never logged, never written to the
-  database, and `.env` is git-ignored. A missing key fails at client
-  construction, naming the variable to set.
+- Providers (`FKL_LLM_PROVIDER`):
+  - **`gemini`** (default) — model `gemini-3.6-flash`, key `GEMINI_API_KEY`
+    (`gemini-2.5-flash` is no longer available to new API keys). Thinking is
+    capped at `LOW` so it cannot consume the output budget and truncate the JSON
+    answer. Free tier ≈ 20 requests/day per model; quotas are per model, so
+    `FKL_LLM_MODEL` can point at another Gemini model when one runs out.
+  - **`groq`** — model `openai/gpt-oss-120b`, key `GROQ_API_KEY`
+    (https://console.groq.com/keys). Free tier: 1K requests/day and 8K tokens/min
+    per model, so large documents are slow but not blocked. A Groq project can
+    block individual models (a 403 names the settings page to enable them). Reasoning effort is
+    `low` for the same truncation reason. Plain `httpx`, no SDK.
+- All provider specifics live in one adapter class each (`_GeminiTransport`,
+  `_GroqTransport` in `app/llm.py`); prompts, JSON schemas, parsing and
+  validation sit above them and never see a provider object. The key is read at
+  call time from the environment, falling back to `.env`; it is never logged,
+  never written to the database, and `.env` is git-ignored. A missing key fails
+  at client construction, naming the variable to set. `runs.estimated_cost_usd`
+  uses Gemini list prices and is only an estimate (Groq's free tier is free).
 
 ## Design docs
 

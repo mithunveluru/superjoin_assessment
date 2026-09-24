@@ -11,11 +11,14 @@ Not imported by the app or the test suite.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-from app.db import connect, init_db
-from app.extract import extract_document, extraction_summary
-from app.facts import evidence_chain
-from app.ingest import ingest_pdf
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.db import connect, init_db  # noqa: E402
+from app.extract import extract_document, extraction_summary  # noqa: E402
+from app.facts import evidence_chain  # noqa: E402
+from app.ingest import ingest_pdf  # noqa: E402
 
 
 def main(pdf_paths: list[str]) -> int:

@@ -319,3 +319,32 @@ def test_failed_extraction_message_names_the_real_reason(db_path, make_pdf):
     assert "chunk error(s)" in detail
     assert "no reason recorded" not in detail, detail
     assert "rate_limit" in detail, detail
+
+
+def test_all_chunks_truncated_fails_the_run(db_path, make_pdf):
+    """A reply cut off at max_tokens yields no facts; the run must fail (so the
+    document can be re-processed) rather than complete with 0 facts."""
+    from app.config import get_settings
+    from app.ingest import ingest_pdf
+    from tests.fakes import FakeLLM
+
+    db.init_db(db_path)
+    doc = ingest_pdf(str(make_pdf(["Acme reported revenue for FY24."], name="cut.pdf")),
+                     database_path=db_path).document_id
+    conn = db.connect(db_path)
+    with db.transaction(conn):
+        rid = pipeline_start(conn, doc, settings=get_settings())
+    conn.close()
+
+    truncated = LLMExtraction(raw_text='{"facts": [', parsed=None,
+                              error_code="truncated_response", error_detail="hit max_tokens",
+                              model="fake", prompt_version="test-v1")
+    pipeline_run(doc, rid, database_path=db_path, settings=get_settings(),
+                 extractor=FakeLLM([truncated]))
+
+    conn = db.connect(db_path)
+    row = conn.execute("SELECT status, status_detail FROM documents WHERE id = ?",
+                       (doc,)).fetchone()
+    conn.close()
+    assert row["status"] == "failed", row["status"]
+    assert "truncated_response" in row["status_detail"], row["status_detail"]

@@ -362,6 +362,9 @@ def test_api_process_path_reaches_gemini_for_all_three_llm_stages(api, make_pdf,
 
     monkeypatch.setenv("FKL_LLM_API_KEY_ENV", "FKL_TEST_KEY")
     monkeypatch.setenv("FKL_TEST_KEY", "not-a-real-key")
+    # pin provider/model so the assertion does not depend on the local .env
+    monkeypatch.setenv("FKL_LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("FKL_LLM_MODEL", "gemini-3.6-flash")
     get_settings.cache_clear()
 
     built: list[str] = []
@@ -387,7 +390,7 @@ def test_api_process_path_reaches_gemini_for_all_three_llm_stages(api, make_pdf,
     assert api.post(f"/documents/{doc_id}/process").status_code == 202
 
     # one transport per client: extractor + entity confirmer + relationship confirmer
-    assert built == ["gemini-2.5-flash"] * 3, built
+    assert built == ["gemini-3.6-flash"] * 3, built
     assert isinstance(seen.get("entity"), EntityConfirmer), "resolve stage got no Gemini confirmer"
     assert isinstance(seen.get("relationship"), RelationshipConfirmer), \
         "reason stage got no Gemini confirmer"
@@ -435,3 +438,16 @@ def test_startup_reconciles_runs_interrupted_by_a_restart(db_path, make_pdf):
         assert "interrupted" in run["error"]
         # and the document is processable again rather than wedged
         assert client.post(f"/documents/{doc_id}/process").status_code == 202
+
+
+def test_unknown_relationship_category_400(seeded_api):
+    r = seeded_api.get("/relationships?category=BOGUS")
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "invalid_category"
+
+
+def test_request_validation_uses_common_error_body(seeded_api):
+    r = seeded_api.get("/facts?limit=abc")
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "invalid_request"
+    assert "limit" in r.json()["error"]["message"]

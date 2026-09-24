@@ -2,10 +2,10 @@
 (prefix ``FKL_``) and an optional ``.env`` file. Nothing dataset-specific.
 
 The LLM *API key* is the one exception to the prefix: it is read from whatever
-env var ``llm_api_key_env`` names (default ``GEMINI_API_KEY``), so the real
-secret never sits under a project-specific name and never gets committed. The
-indirection exists so tests can point at a variable nothing defines; production
-should just set ``GEMINI_API_KEY``.
+env var ``llm_api_key_env`` names (default: the provider's own, ``GEMINI_API_KEY``
+or ``GROQ_API_KEY``), so the real secret never sits under a project-specific
+name and never gets committed. The indirection exists so tests can point at a
+variable nothing defines; production should just set the provider's variable.
 """
 
 from __future__ import annotations
@@ -14,9 +14,19 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# provider -> (default model, env var holding its key); used when FKL_LLM_MODEL /
+# FKL_LLM_API_KEY_ENV are left unset, so switching provider is one line.
+PROVIDER_DEFAULTS = {
+    "gemini": ("gemini-3.6-flash", "GEMINI_API_KEY"),   # 2.5-flash is closed to new keys
+    # free tier: 1K requests/day/model. 120b, not 20b: new Groq projects were
+    # seen with 20b blocked at the project level while 120b was enabled
+    "groq": ("openai/gpt-oss-120b", "GROQ_API_KEY"),
+}
 
 
 def _dotenv_values() -> dict[str, str]:
@@ -40,10 +50,10 @@ class Settings(BaseSettings):
     uploads_dir: Path = PROJECT_ROOT / "uploads"
 
     # --- LLM (used from Phase 4) ------------------------------------------------
-    llm_provider: str = "gemini"     # the only supported provider (app/llm.py)
-    llm_model: str = "gemini-2.5-flash"
-    llm_api_key_env: str = "GEMINI_API_KEY"
-    llm_temperature: float = 0.0     # sent to Gemini; 0.0 keeps extraction repeatable
+    llm_provider: str = "gemini"     # gemini | groq (app/llm.py)
+    llm_model: str = ""              # "" -> the provider's default (PROVIDER_DEFAULTS)
+    llm_api_key_env: str = ""        # "" -> the provider's key variable
+    llm_temperature: float = 0.0     # 0.0 keeps extraction repeatable
     llm_max_tokens: int = 8192       # per-chunk extraction output cap
     llm_timeout_seconds: float = 120.0
     llm_retry_attempts: int = 5      # SDK-level retry on 429/5xx
@@ -53,7 +63,7 @@ class Settings(BaseSettings):
     # successful chunk, so an isolated bad chunk never trips it.
     extract_consecutive_error_limit: int = 5
     # runs.estimated_cost_usd is an estimate only — set these to the configured
-    # model's list price (defaults are gemini-2.5-flash rates).
+    # model's list price (defaults are gemini-2.5-flash rates, not re-checked for 3.6).
     llm_input_cost_per_token: float = 0.3e-6
     llm_output_cost_per_token: float = 2.5e-6
     # v2 tightened the subject rule (entity, not the sentence's grammatical
@@ -148,6 +158,13 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     log_level: str = "info"
+
+    @model_validator(mode="after")
+    def _provider_defaults(self) -> Settings:
+        model, key_env = PROVIDER_DEFAULTS.get(self.llm_provider, ("", ""))
+        self.llm_model = self.llm_model or model
+        self.llm_api_key_env = self.llm_api_key_env or key_env
+        return self
 
     def llm_api_key(self) -> str | None:
         """The live LLM API key, or None if unset. Read at call time so tests
